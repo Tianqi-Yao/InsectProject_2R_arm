@@ -38,6 +38,25 @@ def cmd_test_camera(args):
 
     h = build_hardware(args)
     h.camera.connect()
+
+    if args.watch:
+        print("watching for tags -- move/reprint as needed, Ctrl+C when done "
+              "to save a final annotated snapshot...")
+        try:
+            while True:
+                frame = h.camera.capture_gray()
+                detections = h.detector.detect(frame)
+                stamp = time.strftime("%H:%M:%S")
+                if detections:
+                    summary = ", ".join(f"id={tid}@({d.center[0]:.0f},{d.center[1]:.0f})"
+                                         for tid, d in sorted(detections.items()))
+                    print(f"[{stamp}] {len(detections)} tag(s): {summary}")
+                else:
+                    print(f"[{stamp}] no tags detected")
+                time.sleep(args.interval)
+        except KeyboardInterrupt:
+            print("\nstopped, capturing final snapshot...")
+
     frame = h.camera.capture_gray()
     detections = h.detector.detect(frame)
     print(f"detected {len(detections)} tag(s): {sorted(detections)}")
@@ -197,6 +216,10 @@ def main():
 
     p_cam = sub.add_parser("test-camera", help="capture + detect tags, save annotated image")
     p_cam.add_argument("--out", default=None)
+    p_cam.add_argument("--watch", action="store_true",
+                        help="loop printing live detections to the terminal before saving "
+                             "the final snapshot (Ctrl+C to stop)")
+    p_cam.add_argument("--interval", type=float, default=0.5, help="seconds between --watch captures")
 
     sub.add_parser("homography", help="detect 4 corner tags, fit and save homography")
 
