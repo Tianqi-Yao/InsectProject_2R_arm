@@ -1,3 +1,26 @@
+# Dependencies for the STS3215 + camera + AprilTag hardware stack
+# (arm_core.py / arm_hardware.py / main.py). The old requirements.txt
+# (pyserial/matplotlib/pygame) is for controller.py/sim.py, the previous
+# MG90S open-loop iteration -- kept as-is, not used by this stack.
+
+numpy>=1.24
+scipy>=1.10
+opencv-python-headless>=4.8   # headless: no GUI deps needed on the Pi
+pupil-apriltags>=1.0
+
+# Feetech STS3215 bus servo SDK. Package name confirmed to vary between
+# forks -- after installing, run:
+#   python -c "import scservo_sdk as s; print([n for n in dir(s) if not n.startswith('_')])"
+# and check it exposes PortHandler / sms_sts / ReadPos / WritePosEx (see
+# arm_hardware.py's NOTE at the top). If your fork names things
+# differently, that's the one file to adjust -- nothing else depends on
+# these exact names.
+feetech-servo-sdk
 pyserial>=3.5
-matplotlib>=3.5
-pygame>=2.1
+
+# picamera2 is Raspberry Pi OS-specific and ships as a system package with
+# libcamera bindings that pip usually can't build correctly on its own.
+# Install it via apt instead of pip:
+#   sudo apt install -y python3-picamera2
+# If you must use a venv, create it with --system-site-packages so the
+# apt-installed picamera2 is visible inside it.
