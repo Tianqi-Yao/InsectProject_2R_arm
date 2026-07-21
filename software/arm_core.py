@@ -59,6 +59,14 @@ class ArmParams:
     base_y: float
     servo1_offset_deg: float
     servo2_offset_deg: float
+    # +1 or -1: which way a joint's raw servo angle increases relative to
+    # our math convention (theta measured CCW). This is a fixed fact about
+    # how a servo happens to be mounted/wired -- not something to fit
+    # numerically (a sign flip is a reflection, no amount of offset/L1/L2
+    # tuning can reproduce it) -- so it's excluded from as_vector/from_vector
+    # and never touched by fit_kinematics.
+    servo1_dir: int = 1
+    servo2_dir: int = 1
 
     @classmethod
     def nominal(cls) -> "ArmParams":
@@ -72,8 +80,8 @@ class ArmParams:
                 self.servo1_offset_deg, self.servo2_offset_deg]
 
     @classmethod
-    def from_vector(cls, vec) -> "ArmParams":
-        return cls(*vec)
+    def from_vector(cls, vec, servo1_dir: int = 1, servo2_dir: int = 1) -> "ArmParams":
+        return cls(*vec, servo1_dir=servo1_dir, servo2_dir=servo2_dir)
 
 
 @dataclass
@@ -101,8 +109,8 @@ def ik_solve(p: ArmParams, x_ws: float, y_ws: float) -> IKResult:
     beta = math.degrees(math.atan2(p.L2 * s2, p.L1 + p.L2 * c2))
     theta1 = alpha - beta
 
-    servo1 = theta1 + p.servo1_offset_deg
-    servo2 = theta2 + p.servo2_offset_deg
+    servo1 = p.servo1_offset_deg + p.servo1_dir * theta1
+    servo2 = p.servo2_offset_deg + p.servo2_dir * theta2
     return IKResult(theta1, theta2, servo1, servo2, reachable=True)
 
 
@@ -114,11 +122,27 @@ def fk_from_servo_angles(p: ArmParams, servo1_deg: float, servo2_deg: float) -> 
     to "take a real encoder angle pair, predict where the end effector
     should be, compare against what the camera measured."
     """
-    theta1 = math.radians(servo1_deg - p.servo1_offset_deg)
-    theta2 = math.radians(servo2_deg - p.servo2_offset_deg)
+    theta1 = math.radians(p.servo1_dir * (servo1_deg - p.servo1_offset_deg))
+    theta2 = math.radians(p.servo2_dir * (servo2_deg - p.servo2_offset_deg))
     ex = p.L1 * math.cos(theta1) + p.L2 * math.cos(theta1 + theta2)
     ey = p.L1 * math.sin(theta1) + p.L2 * math.sin(theta1 + theta2)
     return p.base_x + ex, p.base_y + ey
+
+
+def fk_joint_positions(p: ArmParams, servo1_deg: float, servo2_deg: float
+                        ) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Like fk_from_servo_angles, but also returns the elbow position --
+    for drawing the two links separately (e.g. manual_test/gui.py), not
+    needed by the fit/self-check, which only care about the end effector."""
+    theta1 = math.radians(p.servo1_dir * (servo1_deg - p.servo1_offset_deg))
+    theta2 = math.radians(p.servo2_dir * (servo2_deg - p.servo2_offset_deg))
+    ex1 = p.L1 * math.cos(theta1)
+    ey1 = p.L1 * math.sin(theta1)
+    ex2 = ex1 + p.L2 * math.cos(theta1 + theta2)
+    ey2 = ey1 + p.L2 * math.sin(theta1 + theta2)
+    elbow = (p.base_x + ex1, p.base_y + ey1)
+    ee = (p.base_x + ex2, p.base_y + ey2)
+    return elbow, ee
 
 
 # ── 2. Homography (pixel <-> workspace mm) ────────────────────────────────
@@ -192,7 +216,11 @@ _PARAM_ORDER = ("L1", "L2", "base_x", "base_y",
 DEFAULT_BOUNDS = dict(
     L1=(80.0, 170.0), L2=(60.0, 130.0),
     base_x=(50.0, 150.0), base_y=(-90.0, 0.0),
-    servo1_offset_deg=(-90.0, 90.0), servo2_offset_deg=(-90.0, 90.0),
+    # +-180 (not +-90): the STS3215's raw angle spans a full 0-360 circle,
+    # and depending on how a servo happens to be mounted, its zero offset
+    # can land anywhere in that circle (e.g. ~179 deg, near a servo's
+    # physical center, is a normal offset on real hardware -- not a bug).
+    servo1_offset_deg=(-180.0, 180.0), servo2_offset_deg=(-180.0, 180.0),
 )
 
 
@@ -225,8 +253,9 @@ def generate_calibration_targets(params: Optional[ArmParams] = None,
     return targets
 
 
-def _residuals(vec: np.ndarray, samples: list[CalibSample]) -> np.ndarray:
-    p = ArmParams.from_vector(vec)
+def _residuals(vec: np.ndarray, samples: list[CalibSample],
+                servo1_dir: int, servo2_dir: int) -> np.ndarray:
+    p = ArmParams.from_vector(vec, servo1_dir=servo1_dir, servo2_dir=servo2_dir)
     out = np.empty(2 * len(samples))
     for i, s in enumerate(samples):
         wx, wy = fk_from_servo_angles(p, s.servo1_deg, s.servo2_deg)
@@ -263,10 +292,13 @@ def fit_kinematics(samples: list[CalibSample],
     lower = [bounds[k][0] for k in _PARAM_ORDER]
     upper = [bounds[k][1] for k in _PARAM_ORDER]
 
-    result = least_squares(_residuals, x0=x0.as_vector(), args=(samples,),
+    # servo1_dir/servo2_dir are fixed hardware facts, not fit -- carried
+    # through from x0 into every trial ArmParams the optimizer builds.
+    result = least_squares(_residuals, x0=x0.as_vector(),
+                            args=(samples, x0.servo1_dir, x0.servo2_dir),
                             bounds=(lower, upper), loss="soft_l1", f_scale=1.0)
 
-    fitted = ArmParams.from_vector(result.x)
+    fitted = ArmParams.from_vector(result.x, servo1_dir=x0.servo1_dir, servo2_dir=x0.servo2_dir)
     errs = [math.hypot(result.fun[2 * i], result.fun[2 * i + 1]) for i in range(len(samples))]
     return FitReport(
         n_points=len(samples),
@@ -307,6 +339,10 @@ def _validate_calib(calib: dict) -> None:
         val = k.get(key)
         if val is None or not (lo - 1e-6 <= val <= hi + 1e-6):
             raise ValueError(f"calib.json kinematics.{key}={val} out of expected range [{lo},{hi}]")
+    for dir_key in ("servo1_dir", "servo2_dir"):
+        val = k.get(dir_key, 1)
+        if val not in (1, -1):
+            raise ValueError(f"calib.json kinematics.{dir_key}={val} must be 1 or -1")
     for name in ("homography_drift_halt_mm", "arm_position_halt_mm"):
         if calib.get("thresholds", {}).get(name) is None:
             raise ValueError(f"calib.json missing thresholds.{name}")
@@ -341,7 +377,8 @@ def save_calib(calib: dict, path: Optional[Path] = None) -> None:
 def calib_arm_params(calib: dict) -> ArmParams:
     k = calib["kinematics"]
     return ArmParams(L1=k["L1"], L2=k["L2"], base_x=k["base_x"], base_y=k["base_y"],
-                      servo1_offset_deg=k["servo1_offset_deg"], servo2_offset_deg=k["servo2_offset_deg"])
+                      servo1_offset_deg=k["servo1_offset_deg"], servo2_offset_deg=k["servo2_offset_deg"],
+                      servo1_dir=k.get("servo1_dir", 1), servo2_dir=k.get("servo2_dir", 1))
 
 
 # ── 5. Alarm hook (placeholder) ─────────────────────────────────────────

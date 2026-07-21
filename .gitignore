@@ -1,0 +1,21 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Runtime-generated calibration state -- machine/robot-specific, regenerate
+# locally via main.py (homography / calibrate / selfcheck), not source.
+software/calib.json
+software/calib_history/
+software/alarms.log
+software/tag_detect.jpg
+
+# Arduino build output, if compiled via arduino-cli
+build/
+*.hex
+*.bin

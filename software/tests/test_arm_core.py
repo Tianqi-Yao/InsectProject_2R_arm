@@ -44,6 +44,34 @@ def test_ik_fk_round_trip():
         assert wy == pytest.approx(y, abs=1e-6)
 
 
+def test_ik_fk_round_trip_with_inverted_joint():
+    # servo2_dir=-1 models a joint wired/mounted so its raw angle increases
+    # opposite to our math convention -- confirmed on real hardware where
+    # joint1's jog direction matched expectations but joint2's was reversed.
+    p = ac.ArmParams(L1=118.0, L2=88.0, base_x=97.0, base_y=-42.0,
+                      servo1_offset_deg=179.3, servo2_offset_deg=179.3,
+                      servo1_dir=1, servo2_dir=-1)
+    for x, y in [(100, 75), (30, 20), (170, 130), (60, 110)]:
+        r = ac.ik_solve(p, x, y)
+        assert r.reachable
+        wx, wy = ac.fk_from_servo_angles(p, r.servo1_deg, r.servo2_deg)
+        assert wx == pytest.approx(x, abs=1e-6)
+        assert wy == pytest.approx(y, abs=1e-6)
+
+
+def test_inverted_joint_direction_actually_changes_servo_command():
+    # sanity check that servo2_dir isn't a no-op: flipping it should send a
+    # different servo2 command for the same target, not the same one.
+    base = dict(L1=118.0, L2=88.0, base_x=97.0, base_y=-42.0,
+                servo1_offset_deg=179.3, servo2_offset_deg=179.3)
+    p_fwd = ac.ArmParams(**base, servo1_dir=1, servo2_dir=1)
+    p_inv = ac.ArmParams(**base, servo1_dir=1, servo2_dir=-1)
+    r_fwd = ac.ik_solve(p_fwd, 150.0, 40.0)
+    r_inv = ac.ik_solve(p_inv, 150.0, 40.0)
+    assert r_fwd.servo1_deg == pytest.approx(r_inv.servo1_deg)
+    assert r_fwd.servo2_deg != pytest.approx(r_inv.servo2_deg)
+
+
 def test_ik_rejects_unreachable_point():
     p = ac.ArmParams.nominal()
     far_beyond_reach = ac.ik_solve(p, 100.0, p.L1 + p.L2 + 500.0)
@@ -110,6 +138,36 @@ def test_fit_kinematics_recovers_synthetic_ground_truth():
     assert fp.base_x == pytest.approx(true_params.base_x, abs=1.5)
     assert fp.base_y == pytest.approx(true_params.base_y, abs=1.5)
     assert fp.servo1_offset_deg == pytest.approx(true_params.servo1_offset_deg, abs=1.0)
+    assert fp.servo2_offset_deg == pytest.approx(true_params.servo2_offset_deg, abs=1.0)
+
+
+def test_fit_kinematics_recovers_ground_truth_with_inverted_joint():
+    # Same as above but joint2 is wired backwards (servo2_dir=-1), matching
+    # the real hardware finding. fit_kinematics must carry dir through from
+    # x0 rather than silently assuming +1, or this fit would never converge.
+    true_params = ac.ArmParams(L1=118.0, L2=88.0, base_x=96.0, base_y=-42.0,
+                                servo1_offset_deg=19.0, servo2_offset_deg=179.3,
+                                servo1_dir=1, servo2_dir=-1)
+    rng = np.random.default_rng(7)
+    samples = []
+    for theta1 in (-10.0, 10.0, 30.0, 50.0):
+        for theta2 in (20.0, 60.0, 100.0, 140.0):
+            s1 = true_params.servo1_offset_deg + true_params.servo1_dir * theta1
+            s2 = true_params.servo2_offset_deg + true_params.servo2_dir * theta2
+            x, y = ac.fk_from_servo_angles(true_params, s1, s2)
+            noise = rng.normal(scale=0.2, size=2)
+            samples.append(ac.CalibSample(s1, s2, x + noise[0], y + noise[1]))
+
+    x0 = ac.ArmParams(L1=125.0, L2=95.0, base_x=100.0, base_y=-45.0,
+                       servo1_offset_deg=23.08, servo2_offset_deg=180.0,
+                       servo1_dir=1, servo2_dir=-1)
+    report = ac.fit_kinematics(samples, x0=x0)
+
+    assert report.rms_error_mm < 1.0
+    fp = report.params
+    assert fp.servo2_dir == -1  # carried through, not silently reset to +1
+    assert fp.L1 == pytest.approx(true_params.L1, abs=1.5)
+    assert fp.L2 == pytest.approx(true_params.L2, abs=1.5)
     assert fp.servo2_offset_deg == pytest.approx(true_params.servo2_offset_deg, abs=1.0)
 
 
