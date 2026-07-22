@@ -55,14 +55,14 @@ first -- that isolates a hardware/driver problem from a Python one.
 **Servos** (no camera needed):
 ```bash
 ls /dev/ttyUSB* /dev/ttyACM*          # find the port
-python3 main.py test-servo --port /dev/ttyUSB0
+python3 main.py test-servo --port /dev/cu.usbserial-0001
 ```
 Pings both joints, reads their real encoder angles, nudges joint1 by +5deg
 and confirms it settles there.
 
 **Manual jog** (debugging either side of a move):
 ```bash
-python3 main.py jog --port /dev/ttyUSB0
+python3 main.py jog --port /dev/cu.usbserial-0001
 ```
 
 **Pure logic** (no hardware at all):
@@ -79,18 +79,18 @@ Once both camera and servos check out individually:
    works -- keeps it on the same plane the corner tags define, avoiding
    parallax from any camera tilt).
 2. ```bash
-   python3 main.py homography --port /dev/ttyUSB0
+   python3 main.py homography --port /dev/cu.usbserial-0001
    ```
    Detects the 4 corner tags, fits the pixel->mm mapping, saves it.
 3. ```bash
-   python3 main.py calibrate --port /dev/ttyUSB0
+   python3 main.py calibrate --port /dev/cu.usbserial-0001
    ```
    Auto-sweeps a grid of servo angles, reads real encoder positions, watches
    the end-effector tag, and fits L1/L2/base position/servo offsets. Prints
    a per-point error report and asks for confirmation before saving
    (RMS < 1mm: good, 1-3mm: usable, > 3mm: recheck tags/mounting first).
 4. ```bash
-   python3 main.py selfcheck --port /dev/ttyUSB0
+   python3 main.py selfcheck --port /dev/cu.usbserial-0001
    ```
    Boot-time health check: re-verifies homography and does a couple of
    spot-check moves. This is what should run automatically on every restart

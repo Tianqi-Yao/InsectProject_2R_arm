@@ -14,6 +14,10 @@ software/calib.json
 software/calib_history/
 software/alarms.log
 software/tag_detect.jpg
+new/calib.json
+new/calib_history/
+new/alarms.log
+new/tag_detect.jpg
 
 # Arduino build output, if compiled via arduino-cli
 build/

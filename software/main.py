@@ -209,7 +209,7 @@ def cmd_jog(args):
 
 def main():
     parser = argparse.ArgumentParser(description="2R arm control CLI")
-    parser.add_argument("--port", default="/dev/ttyUSB0", help="servo bus serial port")
+    parser.add_argument("--port", default="/dev/cu.usbserial-0001", help="servo bus serial port")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("test-servo", help="ping + read/write smoke test")

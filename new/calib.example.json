@@ -1,0 +1,78 @@
+{
+  "status": "OK",
+  "workspace": {
+    "width_mm": 200.0,
+    "height_mm": 150.0,
+    "corner_tag_ids": {
+      "tl": 0,
+      "tr": 1,
+      "br": 2,
+      "bl": 3
+    },
+    "corner_world_mm": {
+      "0": [
+        0,
+        150
+      ],
+      "1": [
+        200,
+        150
+      ],
+      "2": [
+        200,
+        0
+      ],
+      "3": [
+        0,
+        0
+      ]
+    },
+    "ee_tag_id": 10
+  },
+  "homography": {
+    "H": null,
+    "computed_at": null
+  },
+  "kinematics": {
+    "L1": 125.0,
+    "L2": 95.0,
+    "base_x": 100.0,
+    "base_y": -45.0,
+    "servo1_offset_deg": 179.297,
+    "servo2_offset_deg": 179.297,
+    "servo1_dir": 1,
+    "servo2_dir": -1,
+    "elbow_offset_mm": 0.0,
+    "fit_report": null
+  },
+  "hardware": {
+    "servo_port": "/dev/cu.usbserial-0001",
+    "joint_ids": {
+      "joint1": 1,
+      "joint2": 2
+    }
+  },
+  "motion": {
+    "planner_name": "trapezoidal",
+    "jog_vmax_deg_s": 60.0,
+    "jog_amax_deg_s2": 120.0,
+    "scan_vmax_deg_s": 90.0,
+    "scan_amax_deg_s2": 180.0,
+    "scan_nx": 50,
+    "scan_ny": 40,
+    "scan_rows_limit": null,
+    "scan_margin_mm": 20.0,
+    "blend_threshold": 0.7,
+    "control_hz": 50.0
+  },
+  "thresholds": {
+    "homography_drift_halt_mm": 3.0,
+    "arm_position_halt_mm": 3.0
+  },
+  "spotcheck_poses": [
+    {
+      "joint1": 68.0,
+      "joint2": 116.0
+    }
+  ]
+}
