@@ -4,7 +4,7 @@ driver) drive the actual tool code -- jogging, recording corners, adjusting
 rows/cols, saving, and running the generated path -- exactly like a person
 would with the keyboard.
 
-Complements tests/test_path_core.py's pure-logic tests (rect_from_corners/
+Complements tests/test_path_core.py's pure-logic tests (sub_rect_from_corners/
 generate_node_path/PathRunner in isolation): this exercises the actual
 teach/run wiring inside the tool itself, same pattern as
 tests/test_scan_area_gui.py and tests/test_trace_boundary_gui.py.
@@ -52,7 +52,11 @@ def _load_gui_module():
     return module
 
 
-def _fake_calib(joint_limits_deg=None):
+def _fake_calib(joint_limits_deg=None, scan_area=None):
+    """scan_area, if given, is (center_x, center_y, width, height,
+    rotation_deg) written into calib["motion"] -- otherwise
+    arm_core.calib_scan_area() falls back to the full (unrotated)
+    calibration sheet, (100.0, 75.0, 200.0, 150.0, 0.0)."""
     def fake_load_calib(path=None):
         calib = ac._default_calib()
         calib["kinematics"] = {
@@ -62,6 +66,13 @@ def _fake_calib(joint_limits_deg=None):
         }
         calib["hardware"] = {"servo_port": "/dev/fake", "joint_ids": {"joint1": 1, "joint2": 2}}
         calib["joint_limits_deg"] = joint_limits_deg
+        if scan_area is not None:
+            cx, cy, w, h, rot = scan_area
+            calib["motion"]["scan_center_x_mm"] = cx
+            calib["motion"]["scan_center_y_mm"] = cy
+            calib["motion"]["scan_width_mm"] = w
+            calib["motion"]["scan_height_mm"] = h
+            calib["motion"]["scan_rotation_deg"] = rot
         return calib
     return fake_load_calib
 
@@ -116,7 +127,12 @@ def _scripted_event_get(script):
 # ── TEACH mode: jog + record corners + adjust grid + save ────────────────
 
 def test_path_gui_teach_records_corners_adjusts_grid_and_saves(monkeypatch):
-    monkeypatch.setattr(ac, "load_calib", _fake_calib(joint_limits_deg=None))
+    # A huge, unrotated scan area centered on the arm's own base -- covers
+    # every jog position this test visits, so the scan-area membership
+    # check (see test_path_gui_teach_rejects_corner_outside_scan_area)
+    # never gets in the way of what this test is actually checking.
+    monkeypatch.setattr(ac, "load_calib",
+                         _fake_calib(joint_limits_deg=None, scan_area=(100.0, -45.0, 600.0, 600.0, 0.0)))
     monkeypatch.setattr(hw, "Servos", FakeServosStatic)
     monkeypatch.setattr(pc, "load_path_config", lambda path=None: pc.PathConfig())
 
@@ -171,12 +187,13 @@ def test_path_gui_save_also_writes_screenshot(monkeypatch, _fast_and_clean):
 # ── RUN mode ───────────────────────────────────────────────────────────
 
 def test_path_gui_run_mode_visits_every_node_in_order(monkeypatch):
-    monkeypatch.setattr(ac, "load_calib", _fake_calib(joint_limits_deg=None))
+    scan_area = (100.0, 75.0, 200.0, 150.0, 0.0)  # matches the default (unconfigured) fallback
+    monkeypatch.setattr(ac, "load_calib", _fake_calib(joint_limits_deg=None, scan_area=scan_area))
     monkeypatch.setattr(hw, "Servos", FakeServosStatic)
 
     cfg = pc.PathConfig(corner_a_mm=(80.0, 60.0), corner_b_mm=(120.0, 90.0), rows=2, cols=2, dwell_s=0.0)
     monkeypatch.setattr(pc, "load_path_config", lambda path=None: cfg)
-    expected_nodes = pc.generate_node_path(cfg)
+    expected_nodes = pc.generate_node_path(cfg, scan_area)
 
     arrivals = []
     monkeypatch.setattr(pc, "default_on_arrive",
@@ -255,6 +272,103 @@ def test_path_gui_refuses_to_run_before_both_corners_are_taught(monkeypatch):
     _load_gui_module().main()
 
     assert created == []
+
+
+# ── Scan-area membership + rotation following ────────────────────────────
+
+def test_path_gui_teach_rejects_corner_outside_scan_area_then_accepts_once_inside(monkeypatch):
+    small_scan_area = (100.0, 75.0, 40.0, 40.0, 0.0)  # doesn't contain the arm's starting position
+    monkeypatch.setattr(ac, "load_calib", _fake_calib(joint_limits_deg=None, scan_area=small_scan_area))
+    monkeypatch.setattr(hw, "Servos", FakeServosStatic)
+    monkeypatch.setattr(pc, "load_path_config", lambda path=None: pc.PathConfig())
+
+    params = _default_params()
+    initial_target = ac.fk_from_servo_angles(params, 100.0, 175.0)
+    assert not ac.point_in_scan_area(*small_scan_area, *initial_target), \
+        "test premise: the arm's starting position must be outside the scan area"
+
+    saved_corner_a = []
+    monkeypatch.setattr(pc, "save_path_config",
+                         lambda cfg, path=None: saved_corner_a.append(cfg.corner_a_mm))
+
+    up_events = [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_UP, mod=0)] * 20
+    script = {
+        5: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_1, mod=0)],  # rejected: outside
+        6: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_s, mod=0)],  # save #1 -- still unset
+        7: up_events,                                                    # jog toward the scan area
+        8: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_1, mod=0)],  # accepted: now inside
+        9: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_s, mod=0)],  # save #2 -- recorded
+        12: [pygame.event.Event(pygame.QUIT)],
+    }
+    monkeypatch.setattr(pygame.event, "get", _scripted_event_get(script))
+
+    _load_gui_module().main()
+
+    assert saved_corner_a[0] is None, "recording while outside the scan area must be rejected"
+    assert saved_corner_a[1] is not None, "recording while inside the scan area must succeed"
+    assert ac.point_in_scan_area(*small_scan_area, *saved_corner_a[1])
+
+
+def test_path_gui_arrow_key_jog_follows_scan_area_rotation(monkeypatch):
+    import jog_controller as jc
+
+    # Huge + centered on the arm's own base, so nothing gets rejected by
+    # the scan-area membership check -- this test only cares about which
+    # direction a jog nudge goes.
+    rotated_scan_area = (100.0, -45.0, 400.0, 400.0, 90.0)
+    monkeypatch.setattr(ac, "load_calib", _fake_calib(joint_limits_deg=None, scan_area=rotated_scan_area))
+    monkeypatch.setattr(hw, "Servos", FakeServosStatic)
+    monkeypatch.setattr(pc, "load_path_config", lambda path=None: pc.PathConfig())
+
+    nudges = []
+    original_nudge = jc.ArmController.nudge_workspace
+
+    def traced_nudge(self, dx, dy, base):
+        nudges.append((dx, dy))
+        return original_nudge(self, dx, dy, base)
+
+    monkeypatch.setattr(jc.ArmController, "nudge_workspace", traced_nudge)
+
+    script = {
+        5: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_UP, mod=0)],
+        8: [pygame.event.Event(pygame.QUIT)],
+    }
+    monkeypatch.setattr(pygame.event, "get", _scripted_event_get(script))
+
+    _load_gui_module().main()
+
+    assert len(nudges) == 1
+    dx, dy = nudges[0]
+    # A 90deg-rotated scan area turns "up" into world -x (same convention
+    # manual_test/gui.py's arrow keys already follow -- see
+    # tests/test_gui_layout.py::test_gui_arrow_key_follows_scan_area_rotation).
+    assert dx < -1e-6
+    assert dy == pytest.approx(0.0, abs=1e-6)
+
+
+def test_path_gui_comma_period_adjust_dwell_minus_equals_do_nothing(monkeypatch):
+    monkeypatch.setattr(ac, "load_calib", _fake_calib(joint_limits_deg=None))
+    monkeypatch.setattr(hw, "Servos", FakeServosStatic)
+    monkeypatch.setattr(pc, "load_path_config", lambda path=None: pc.PathConfig(dwell_s=1.0))
+
+    saved = {}
+    monkeypatch.setattr(pc, "save_path_config", lambda cfg, path=None: saved.update(cfg=cfg))
+
+    script = {
+        5: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_MINUS, mod=0)],   # no-op now
+        6: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_EQUALS, mod=0)],  # no-op now
+        7: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_COMMA, mod=0)],   # -0.2
+        8: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_PERIOD, mod=0)],  # +0.2
+        9: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_PERIOD, mod=0)],  # +0.2
+        11: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_s, mod=0)],
+        14: [pygame.event.Event(pygame.QUIT)],
+    }
+    monkeypatch.setattr(pygame.event, "get", _scripted_event_get(script))
+
+    _load_gui_module().main()
+
+    # 1.0 -0.2(comma) +0.2(period) +0.2(period) = 1.2; '-'/'=' must be no-ops.
+    assert saved["cfg"].dwell_s == pytest.approx(1.2)
 
 
 def test_path_gui_never_touches_torque(monkeypatch):

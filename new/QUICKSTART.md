@@ -302,21 +302,33 @@ drives the arm along a manually-taught fixed rectangle, stopping at every
 node to dwell (with a placeholder hook reserved for a real camera capture
 later, not wired up yet).
 
+This tool reads (but never edits) the yellow tiltable scan area you fit in
+step 7 with `scan_area_gui.py` -- it's drawn as a reference boundary, both
+taught corners must fall inside it or recording is rejected, and the
+generated sub-rectangle/serpentine path directly inherit its rotation (not
+the global x/y axes). If you never ran step 7, `calib_scan_area()` falls
+back to the full (unrotated) calibration sheet, so the teachable area is
+effectively "anywhere inside the sheet." To move/rotate that yellow area,
+go back to `scan_area_gui.py` -- this tool is read-only with respect to it.
+
 ```bash
 python3 fixed_path_scan/path_gui.py
 ```
 
 Starts in TEACH mode:
 
-- arrow keys: jog the real arm (5mm per press)
-- `1`/`2`: record wherever the arm currently is as rectangle corner A/B --
-  no typed coordinates, no mouse dragging
+- arrow keys: jog the real arm (5mm per press, direction follows the scan
+  area's rotation -- plain up/down/left/right if it was never rotated)
+- `1`/`2`: record wherever the arm currently is as sub-rectangle corner
+  A/B -- no typed coordinates, no mouse dragging; rejected with a message
+  if the current position is outside the scan area
 - `[`/`]`: cols -1/+1, `;`/`'`: rows -1/+1 (both floor at 2)
-- `-`/`=`: per-node dwell time -0.2s/+0.2s
+- `,`/`.`: per-node dwell time -0.2s/+0.2s
 - the panel shows both corners' coordinates, rows/cols, the derived node
-  spacing (mm), and dwell time, live; the canvas overlays the generated
-  serpentine node preview -- each node a small dot, green if reachable, red
-  if it's outside the arm's IK/joint-limit range
+  spacing (mm), and dwell time, live; the canvas overlays the scan area
+  itself, the taught sub-rectangle's outline, and the generated serpentine
+  node preview -- each node a small dot, green if reachable, red if it's
+  outside the arm's IK/joint-limit range
 - `s`/Enter: save to `fixed_path_scan/path_config.json` (rig-specific
   physical position data, same as calib.json -- already gitignored) and
   write a screenshot to `fixed_path_scan/path_preview.png`

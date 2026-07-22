@@ -765,6 +765,31 @@ def test_scan_area_corners_90deg_rotation_swaps_extent():
     assert max(ys) - min(ys) == pytest.approx(200.0)  # was the width
 
 
+def test_point_in_scan_area_unrotated_inside_and_outside():
+    assert ac.point_in_scan_area(100.0, 75.0, 200.0, 150.0, 0.0, 100.0, 75.0)  # center
+    assert ac.point_in_scan_area(100.0, 75.0, 200.0, 150.0, 0.0, 199.0, 149.0)  # near a corner
+    assert not ac.point_in_scan_area(100.0, 75.0, 200.0, 150.0, 0.0, 201.0, 75.0)
+    assert not ac.point_in_scan_area(100.0, 75.0, 200.0, 150.0, 0.0, 100.0, -1.0)
+
+
+def test_point_in_scan_area_on_the_boundary_is_inside():
+    # inclusive (<=), matching the +/- half-extent check itself.
+    assert ac.point_in_scan_area(100.0, 75.0, 200.0, 150.0, 0.0, 200.0, 75.0)
+
+
+def test_point_in_scan_area_follows_rotation():
+    # (90, 0) sits on the rectangle's long (width) axis -- inside while
+    # unrotated (half-width=100, half-height=50)...
+    assert ac.point_in_scan_area(0.0, 0.0, 200.0, 100.0, 0.0, 90.0, 0.0)
+    # ...but outside once the rectangle is rotated 90deg (the long axis now
+    # points along world +y instead of +x, so (90,0) falls past the new,
+    # narrower +x half-extent of 50).
+    assert not ac.point_in_scan_area(0.0, 0.0, 200.0, 100.0, 90.0, 90.0, 0.0)
+    # and (0, 90), previously outside (half-height=50), is now inside --
+    # it's landed on the rotated long axis instead.
+    assert ac.point_in_scan_area(0.0, 0.0, 200.0, 100.0, 90.0, 0.0, 90.0)
+
+
 def test_validate_calib_accepts_valid_scan_shape():
     calib = ac._default_calib()
     calib["motion"]["scan_center_x_mm"] = 100.0

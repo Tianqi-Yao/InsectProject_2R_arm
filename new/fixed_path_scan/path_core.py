@@ -8,10 +8,16 @@ manual_test/gui.py and manual_test/run.py already treat as independent of
 the calibration *sheet*/homography concept.
 
 The rectangle is defined by two corners taught by jogging the real arm
-(see path_gui.py), not typed in or dragged with a mouse -- rect_from_corners
-turns whatever two points into a center+width+height for
-arm_core.generate_scan_path, which already implements the serpentine
-(boustrophedon) grid this tool needs; this module doesn't reimplement it.
+(see path_gui.py), not typed in or dragged with a mouse -- both are
+required to fall inside the already-configured "scan area" (the tiltable
+sub-rectangle manual_test/scan_area_gui.py fits visually against what's
+actually reachable, read via arm_core.calib_scan_area). sub_rect_from_corners
+turns the two points into a center+width+height sub-rectangle whose
+rotation is INHERITED from that scan area (not the global x/y axes), fed
+straight into arm_core.generate_scan_path, which already implements the
+rotation-aware serpentine (boustrophedon) grid this tool needs; this
+module doesn't reimplement that part, only the corners->sub-rectangle
+conversion.
 
 PathRunner is the one genuinely new piece: a "visit each node, stop, dwell,
 call a hook" state machine. jog_controller.ArmController's own scanning
@@ -47,7 +53,7 @@ TwoTuple = tuple
 class PathConfig:
     """Everything needed to regenerate a fixed node path: the taught
     rectangle (as two corners, in whatever order they were recorded -- see
-    rect_from_corners) plus the grid density and per-node dwell time.
+    sub_rect_from_corners) plus the grid density and per-node dwell time.
     corner_a_mm/corner_b_mm are None until taught (see path_gui.py's '1'/
     '2' keys)."""
     corner_a_mm: Optional[TwoTuple] = None
@@ -84,43 +90,61 @@ def save_path_config(cfg: PathConfig, path: Optional[Path] = None) -> None:
         json.dump(asdict(cfg), f, indent=2)
 
 
-def rect_from_corners(corner_a: TwoTuple, corner_b: TwoTuple) -> tuple[float, float, float, float]:
-    """Two corners, either order -> (center_x_mm, center_y_mm, width_mm,
-    height_mm). Doesn't care which corner is "first"/"start" vs "end" --
-    only their bounding box matters."""
-    ax, ay = corner_a
-    bx, by = corner_b
-    return ((ax + bx) / 2.0, (ay + by) / 2.0, abs(bx - ax), abs(by - ay))
+def sub_rect_from_corners(scan_area: tuple, corner_a: TwoTuple, corner_b: TwoTuple
+                           ) -> tuple[float, float, float, float, float]:
+    """Two taught corners (world mm, expected to both fall inside
+    `scan_area` -- see arm_core.point_in_scan_area) -> a (center_x_mm,
+    center_y_mm, width_mm, height_mm, rotation_deg) sub-rectangle whose
+    orientation is INHERITED from scan_area's own rotation_deg, not the
+    global x/y axes -- so the serpentine path generated from it marches
+    along the same tilted edges the scan-area rectangle itself has (see
+    manual_test/scan_area_gui.py: a tilted rectangle often covers more of
+    an irregularly-shaped reachable area than an axis-aligned one, which
+    is exactly why the user rotates it in the first place).
+
+    Does this by converting both corners into scan_area's own local frame
+    (world-to-local, the inverse of the rotation arm_core.scan_area_corners
+    applies to go local-to-world), taking their bounding box THERE (where
+    the frame is unrotated, so it's the same plain min/max as before), then
+    converting the resulting local center back to world coordinates."""
+    cx, cy, _w, _h, rotation_deg = scan_area
+    lx1, ly1 = core.rotate_vector(corner_a[0] - cx, corner_a[1] - cy, -rotation_deg)
+    lx2, ly2 = core.rotate_vector(corner_b[0] - cx, corner_b[1] - cy, -rotation_deg)
+    local_cx, local_cy = (lx1 + lx2) / 2.0, (ly1 + ly2) / 2.0
+    width, height = abs(lx2 - lx1), abs(ly2 - ly1)
+    world_dx, world_dy = core.rotate_vector(local_cx, local_cy, rotation_deg)
+    return (cx + world_dx, cy + world_dy, width, height, rotation_deg)
 
 
-def spacing_mm(cfg: PathConfig) -> tuple[float, float]:
+def spacing_mm(cfg: PathConfig, scan_area: tuple) -> tuple[float, float]:
     """(col_spacing_mm, row_spacing_mm) for the current rows/cols against
-    the taught rectangle -- display-only, derived fresh whenever rows/cols
-    change (see the plan's "rows/cols first, spacing is read-only" choice).
-    (0.0, 0.0) if the rectangle isn't taught yet."""
+    the taught sub-rectangle -- display-only, derived fresh whenever
+    rows/cols change (see the plan's "rows/cols first, spacing is
+    read-only" choice). (0.0, 0.0) if the sub-rectangle isn't taught yet."""
     if cfg.corner_a_mm is None or cfg.corner_b_mm is None:
         return (0.0, 0.0)
-    _cx, _cy, width, height = rect_from_corners(cfg.corner_a_mm, cfg.corner_b_mm)
+    _cx, _cy, width, height, _rot = sub_rect_from_corners(scan_area, cfg.corner_a_mm, cfg.corner_b_mm)
     col_spacing = width / (cfg.cols - 1) if cfg.cols > 1 else 0.0
     row_spacing = height / (cfg.rows - 1) if cfg.rows > 1 else 0.0
     return (col_spacing, row_spacing)
 
 
-def generate_node_path(cfg: PathConfig) -> list[tuple[float, float, str]]:
-    """Both corners + rows/cols -> a serpentine node list, via
-    arm_core.generate_scan_path (nx=cols: points per row/along width,
-    ny=rows: number of rows/along height -- see that function's source).
-    margin_mm=0.0 so nodes reach all the way to the taught corners
-    themselves, and rotation_deg=0.0 since this tool has no rotation
-    concept (the rectangle is always axis-aligned to the two corners)."""
+def generate_node_path(cfg: PathConfig, scan_area: tuple) -> list[tuple[float, float, str]]:
+    """Both corners + rows/cols + the scan_area they were taught inside of
+    -> a serpentine node list, via arm_core.generate_scan_path (nx=cols:
+    points per row/along width, ny=rows: number of rows/along height --
+    see that function's source). margin_mm=0.0 so nodes reach all the way
+    to the taught corners themselves; rotation_deg is inherited from
+    scan_area (see sub_rect_from_corners), not fixed at 0."""
     if cfg.corner_a_mm is None or cfg.corner_b_mm is None:
         raise ValueError("both corner_a_mm and corner_b_mm must be taught before generating a path")
     if cfg.rows < 2 or cfg.cols < 2:
         raise ValueError(f"rows and cols must both be >=2, got rows={cfg.rows}, cols={cfg.cols}")
-    center_x, center_y, width, height = rect_from_corners(cfg.corner_a_mm, cfg.corner_b_mm)
+    center_x, center_y, width, height, rotation_deg = sub_rect_from_corners(
+        scan_area, cfg.corner_a_mm, cfg.corner_b_mm)
     return core.generate_scan_path(
         width_mm=width, height_mm=height, nx=cfg.cols, ny=cfg.rows,
-        margin_mm=0.0, center_x_mm=center_x, center_y_mm=center_y, rotation_deg=0.0)
+        margin_mm=0.0, center_x_mm=center_x, center_y_mm=center_y, rotation_deg=rotation_deg)
 
 
 def default_on_arrive(index: int, x_mm: float, y_mm: float, label: str) -> None:

@@ -9,11 +9,19 @@ manual_test/run.py already treat as decoupled from the calibration
 *sheet*/homography concept (see arm_core.py's module docstring for that
 split). workspace/homography are never touched here.
 
-Two corners define a rectangle, taught by JOGGING THE REAL ARM (arrow
+Two corners define a SUB-rectangle, taught by JOGGING THE REAL ARM (arrow
 keys, same nudge_workspace()-based jog as manual_test/gui.py) and pressing
 '1'/'2' to record wherever the arm currently is -- no mouse, no typed
-coordinates. Rows/cols set the grid density (see path_core.PathConfig);
-node spacing is derived and shown, not set directly.
+coordinates. Both corners must fall inside the already-configured "scan
+area" (the yellow tiltable rectangle from manual_test/scan_area_gui.py,
+read via arm_core.calib_scan_area/drawn here for reference only -- this
+tool never edits it, go back to scan_area_gui.py for that); a corner
+jogged to outside it is rejected. The sub-rectangle's orientation is
+INHERITED from the scan area's own rotation, not the global x/y axes, so
+arrow-key jogging and the generated serpentine path both follow whatever
+tilt the scan area has (see path_core.sub_rect_from_corners). Rows/cols
+set the grid density (see path_core.PathConfig); node spacing is derived
+and shown, not set directly.
 
 TEACH mode (default): jog + record corners + adjust rows/cols/dwell_s +
 live preview of the generated serpentine node path, with each node colored
@@ -58,7 +66,8 @@ JOINT_C = (220, 220, 220)
 EE_C = (55, 215, 95)
 BASE_C = (200, 100, 55)
 GHOST_C = (170, 90, 220)
-CORNER_C = (255, 210, 60)
+SCAN_AREA_C = (255, 210, 60)
+CORNER_C = (120, 200, 255)
 NODE_OK_C = (80, 220, 130)
 NODE_BAD_C = (220, 80, 80)
 NODE_CUR_C = (255, 230, 80)
@@ -123,6 +132,10 @@ def main():
     controller = jc.build_controller(servos, calib)
     params = controller.params
     cfg = pc.load_path_config()
+    # (center_x, center_y, width, height, rotation_deg) -- read-only here,
+    # configure/rotate it with manual_test/scan_area_gui.py.
+    scan_area = core.calib_scan_area(calib)
+    scan_rot = scan_area[4]
 
     max_r = params.L1 + params.L2
     layout = Layout(base_x=params.base_x, base_y=params.base_y, max_r_mm=max_r)
@@ -165,12 +178,18 @@ def main():
                     elif mode == "run":
                         pass  # ignore all other keys while a run is in progress
                     elif event.key == pygame.K_1:
-                        cfg.corner_a_mm = workspace_target
-                        msg = f"corner A recorded: ({workspace_target[0]:.1f}, {workspace_target[1]:.1f}) mm"
+                        if core.point_in_scan_area(*scan_area, *workspace_target):
+                            cfg.corner_a_mm = workspace_target
+                            msg = f"corner A recorded: ({workspace_target[0]:.1f}, {workspace_target[1]:.1f}) mm"
+                        else:
+                            msg = "outside the configured scan area -- jog back inside it first"
                         msg_until = now + 3.0
                     elif event.key == pygame.K_2:
-                        cfg.corner_b_mm = workspace_target
-                        msg = f"corner B recorded: ({workspace_target[0]:.1f}, {workspace_target[1]:.1f}) mm"
+                        if core.point_in_scan_area(*scan_area, *workspace_target):
+                            cfg.corner_b_mm = workspace_target
+                            msg = f"corner B recorded: ({workspace_target[0]:.1f}, {workspace_target[1]:.1f}) mm"
+                        else:
+                            msg = "outside the configured scan area -- jog back inside it first"
                         msg_until = now + 3.0
                     elif event.key == pygame.K_LEFTBRACKET:
                         cfg.cols = max(cfg.cols - 1, 2)
@@ -180,9 +199,9 @@ def main():
                         cfg.rows = max(cfg.rows - 1, 2)
                     elif event.key == pygame.K_QUOTE:
                         cfg.rows += 1
-                    elif event.key == pygame.K_MINUS:
+                    elif event.key == pygame.K_COMMA:
                         cfg.dwell_s = max(cfg.dwell_s - 0.2, 0.0)
-                    elif event.key == pygame.K_EQUALS:
+                    elif event.key == pygame.K_PERIOD:
                         cfg.dwell_s += 0.2
                     elif event.key == pygame.K_s:
                         pc.save_path_config(cfg)
@@ -197,7 +216,7 @@ def main():
                         if cfg.corner_a_mm is None or cfg.corner_b_mm is None:
                             msg = "teach both corners ('1' and '2') before running"
                         else:
-                            nodes = pc.generate_node_path(cfg)
+                            nodes = pc.generate_node_path(cfg, scan_area)
                             unreachable = sum(
                                 1 for x, y, _l in nodes
                                 if not core.ik_solve(params, x, y, controller.joint_limits).reachable)
@@ -210,16 +229,20 @@ def main():
                                 msg = f"running {len(nodes)} nodes"
                         msg_until = now + 4.0
                     elif event.key == pygame.K_UP:
-                        new_t = controller.nudge_workspace(0.0, STEP_MM, workspace_target)
+                        dx, dy = core.rotate_vector(0.0, STEP_MM, scan_rot)
+                        new_t = controller.nudge_workspace(dx, dy, workspace_target)
                         workspace_target = new_t if new_t else workspace_target
                     elif event.key == pygame.K_DOWN:
-                        new_t = controller.nudge_workspace(0.0, -STEP_MM, workspace_target)
+                        dx, dy = core.rotate_vector(0.0, -STEP_MM, scan_rot)
+                        new_t = controller.nudge_workspace(dx, dy, workspace_target)
                         workspace_target = new_t if new_t else workspace_target
                     elif event.key == pygame.K_LEFT:
-                        new_t = controller.nudge_workspace(-STEP_MM, 0.0, workspace_target)
+                        dx, dy = core.rotate_vector(-STEP_MM, 0.0, scan_rot)
+                        new_t = controller.nudge_workspace(dx, dy, workspace_target)
                         workspace_target = new_t if new_t else workspace_target
                     elif event.key == pygame.K_RIGHT:
-                        new_t = controller.nudge_workspace(STEP_MM, 0.0, workspace_target)
+                        dx, dy = core.rotate_vector(STEP_MM, 0.0, scan_rot)
+                        new_t = controller.nudge_workspace(dx, dy, workspace_target)
                         workspace_target = new_t if new_t else workspace_target
 
             if now - last_poll >= POLL_INTERVAL_S:
@@ -247,6 +270,11 @@ def main():
                              params.base_y + max_r * math.sin(t)) for t in steps], 1)
             pygame.draw.circle(screen, BASE_C, layout.ws2s(params.base_x, params.base_y), 9, 2)
 
+            # The configured scan area -- reference only, not editable here
+            # (see manual_test/scan_area_gui.py for that).
+            scan_area_points = [layout.ws2s(*c) for c in core.scan_area_corners(*scan_area)]
+            pygame.draw.polygon(screen, SCAN_AREA_C, scan_area_points, 2)
+
             if cfg.corner_a_mm is not None:
                 pygame.draw.circle(screen, CORNER_C, layout.ws2s(*cfg.corner_a_mm), 6, 2)
             if cfg.corner_b_mm is not None:
@@ -254,7 +282,11 @@ def main():
 
             nodes = []
             if cfg.corner_a_mm is not None and cfg.corner_b_mm is not None:
-                nodes = pc.generate_node_path(cfg)
+                sub_rect = pc.sub_rect_from_corners(scan_area, cfg.corner_a_mm, cfg.corner_b_mm)
+                sub_rect_points = [layout.ws2s(*c) for c in core.scan_area_corners(*sub_rect)]
+                pygame.draw.polygon(screen, CORNER_C, sub_rect_points, 1)
+
+                nodes = pc.generate_node_path(cfg, scan_area)
                 colored = _reachable_nodes(nodes, params, controller.joint_limits)
                 points = [layout.ws2s(x, y) for x, y, _l, _r in colored]
                 if len(points) >= 2:
@@ -299,10 +331,17 @@ def main():
             row(f"corner A: {a_txt}", 16, LABEL_C, sfont)
             row(f"corner B: {b_txt}", 22, LABEL_C, sfont)
 
-            col_sp, row_sp = pc.spacing_mm(cfg)
+            col_sp, row_sp = pc.spacing_mm(cfg, scan_area)
             row(f"rows={cfg.rows}  cols={cfg.cols}", 16, LABEL_C, sfont)
             row(f"spacing: col={col_sp:.1f}mm  row={row_sp:.1f}mm", 16, LABEL_C, sfont)
             row(f"dwell: {cfg.dwell_s:.1f}s   nodes: {len(nodes)}", 22, LABEL_C, sfont)
+
+            if abs(scan_rot) > 0.01:
+                row(f"scan area rotation: {scan_rot:.1f} deg", 13, LABEL_C, sfont)
+                row("jog + path direction follow ITS edges, not world x/y", 22, LABEL_C, sfont)
+            else:
+                row(" ", 13)
+                row(" ", 22)
 
             if mode == "run" and runner is not None:
                 row(f"node {runner.index + 1}/{len(runner.nodes)}", 22, HIGHLIGHT)
@@ -315,10 +354,11 @@ def main():
                 row(" ", 22)
 
             row("-- Keys --", 13, LABEL_C, sfont)
-            for line in ["arrows    jog (5mm/press)",
-                         "1 / 2     record corner A / B",
+            for line in ["arrows    jog (5mm/press, follows scan area tilt)",
+                         "1 / 2     record corner A / B (must be inside",
+                         "          the yellow scan area)",
                          "[ ]       cols -/+   ; '   rows -/+",
-                         "- =       dwell -/+ 0.2s",
+                         ", .       dwell -/+ 0.2s",
                          "s         save config + screenshot",
                          "p         screenshot only",
                          "g/Enter   run the path",

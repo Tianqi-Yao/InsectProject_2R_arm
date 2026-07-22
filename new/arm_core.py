@@ -889,6 +889,20 @@ def scan_area_corners(center_x_mm: float, center_y_mm: float, width_mm: float, h
     return corners
 
 
+def point_in_scan_area(center_x_mm: float, center_y_mm: float, width_mm: float, height_mm: float,
+                        rotation_deg: float, x_mm: float, y_mm: float) -> bool:
+    """Whether (x_mm, y_mm) falls within the (possibly rotated) scan-area
+    rectangle -- same shape calib_scan_area()/scan_area_corners() take.
+    Transforms the point into the rectangle's own local frame (the same
+    convention scan_area_corners() builds its corners in, just inverted --
+    world-to-local instead of local-to-world) and checks it against the
+    half-extents there. Used by fixed_path_scan/path_gui.py to reject
+    teaching a sub-rectangle corner that's jogged to outside the
+    already-configured scan area."""
+    lx, ly = rotate_vector(x_mm - center_x_mm, y_mm - center_y_mm, -rotation_deg)
+    return abs(lx) <= width_mm / 2.0 and abs(ly) <= height_mm / 2.0
+
+
 def calib_joint_limits(calib: dict) -> Optional[dict]:
     """Returns {"joint1": (lo, hi), "joint2": (lo, hi), "coupled_boundary": [...]}
     in raw servo-degree space, or None if not yet configured (fresh
