@@ -145,3 +145,72 @@ def test_gui_main_runs_end_to_end_with_a_rotated_offsheet_scan_area(monkeypatch)
     monkeypatch.setattr(pygame.event, "get", fake_event_get)
 
     _load_gui_module().main()  # would raise (as it did) if any draw_*/panel call site was stale
+
+
+def _run_gui_and_capture_nudges(monkeypatch, rotation_deg, key):
+    """Runs main() with a scan area at the given rotation, presses `key`
+    once, and returns the (dx, dy) passed to ArmController.nudge_workspace
+    -- i.e. what the arrow key actually asked to move, in world mm."""
+    import jog_controller as jc
+
+    def fake_load_calib(path=None):
+        calib = core._default_calib()
+        calib["kinematics"] = {
+            "L1": 125.0, "L2": 95.0, "base_x": 100.0, "base_y": -45.0,
+            "servo1_offset_deg": 0.0, "servo2_offset_deg": 0.0,
+            "servo1_dir": 1, "servo2_dir": 1, "elbow_offset_mm": 0.0, "fit_report": None,
+        }
+        calib["hardware"] = {"servo_port": "/dev/fake", "joint_ids": {"joint1": 1, "joint2": 2}}
+        calib["motion"]["scan_center_x_mm"] = 100.0
+        calib["motion"]["scan_center_y_mm"] = 75.0
+        calib["motion"]["scan_width_mm"] = 150.0
+        calib["motion"]["scan_height_mm"] = 100.0
+        calib["motion"]["scan_rotation_deg"] = rotation_deg
+        return calib
+
+    monkeypatch.setattr(core, "load_calib", fake_load_calib)
+    monkeypatch.setattr(hw, "Servos", FakeServosStatic)
+    monkeypatch.setattr(pygame.time, "Clock", _FakeClock)
+
+    call_count = {"n": 0}
+
+    def fake_event_get(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 5:
+            return [pygame.event.Event(pygame.KEYDOWN, key=key, mod=0)]
+        if call_count["n"] == 10:
+            return [pygame.event.Event(pygame.QUIT)]
+        return []
+
+    monkeypatch.setattr(pygame.event, "get", fake_event_get)
+
+    nudges = []
+    original_nudge = jc.ArmController.nudge_workspace
+
+    def traced_nudge(self, dx, dy, base):
+        nudges.append((dx, dy))
+        return original_nudge(self, dx, dy, base)
+
+    monkeypatch.setattr(jc.ArmController, "nudge_workspace", traced_nudge)
+
+    _load_gui_module().main()
+    return nudges
+
+
+def test_gui_arrow_key_moves_along_world_axes_when_scan_area_unrotated(monkeypatch):
+    nudges = _run_gui_and_capture_nudges(monkeypatch, rotation_deg=0.0, key=pygame.K_UP)
+    assert len(nudges) == 1
+    dx, dy = nudges[0]
+    assert dx == pytest.approx(0.0, abs=1e-6)
+    assert dy > 0
+
+
+def test_gui_arrow_key_follows_scan_area_rotation(monkeypatch):
+    # With the scan area rotated 90deg, "up" (previously world +y) should
+    # now point along the rectangle's own rotated "up" edge -- which a
+    # 90deg CCW rotation turns into world -x.
+    nudges = _run_gui_and_capture_nudges(monkeypatch, rotation_deg=90.0, key=pygame.K_UP)
+    assert len(nudges) == 1
+    dx, dy = nudges[0]
+    assert dx < -1e-6
+    assert dy == pytest.approx(0.0, abs=1e-6)

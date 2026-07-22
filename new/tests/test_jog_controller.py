@@ -245,6 +245,30 @@ def test_start_scan_visits_every_reachable_waypoint_in_order():
     assert ctl.commanded_deg == pytest.approx(expected_final)
 
 
+def test_start_scan_chains_waypoints_to_avoid_spurious_360deg_jumps(monkeypatch):
+    # Two waypoints whose independently-computed ik_solve() outputs differ
+    # by ~358deg numerically even though they're physically only ~2deg
+    # apart -- simulates atan2()'s wraparound landing on opposite sides of
+    # the 0/360 seam for two nearby scan points (a real, reproduced bug:
+    # this drove the arm almost a full extra revolution between two
+    # waypoints that were actually right next to each other).
+    ctl, _ = _make_controller(start=(359.0, 100.0))
+    fake_results = iter([
+        ac.IKResult(theta1_deg=0.0, theta2_deg=0.0, servo1_deg=1.0, servo2_deg=100.0, reachable=True),
+        ac.IKResult(theta1_deg=0.0, theta2_deg=0.0, servo1_deg=3.0, servo2_deg=100.0, reachable=True),
+    ])
+    monkeypatch.setattr(jc, "ik_solve", lambda params, x, y, joint_limits=None: next(fake_results))
+
+    ctl.start_scan([(0.0, 0.0, "a"), (0.0, 0.0, "b")])
+
+    targets = ctl._scan.joint_targets
+    assert len(targets) == 2
+    # chained near the arm's actual starting position (359) and each
+    # other -- no ~358deg jump anywhere in the sequence.
+    assert abs(targets[0][0] - 359.0) < 10.0
+    assert abs(targets[1][0] - targets[0][0]) < 10.0
+
+
 def test_scan_progress_advances_and_completes():
     ctl, _ = _make_controller()
     path = ac.generate_scan_path(nx=3, ny=2, margin_mm=20.0)

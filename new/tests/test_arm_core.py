@@ -711,6 +711,44 @@ def test_calib_scan_area_returns_configured_shape():
     assert ac.calib_scan_area(calib) == (100.0, 65.0, 120.0, 90.0, 15.0)
 
 
+def test_wrap_angle_near_no_wrap_needed():
+    assert ac.wrap_angle_near(100.0, 90.0) == pytest.approx(100.0)
+
+
+def test_wrap_angle_near_wraps_up_across_360():
+    # target is "just past 0", reference is "just below 360" -- physically
+    # 2deg apart, not the 358deg a raw subtraction would suggest.
+    assert ac.wrap_angle_near(1.0, 359.0) == pytest.approx(361.0)
+    assert ac.wrap_angle_near(1.0, 359.0) - 359.0 == pytest.approx(2.0)
+
+
+def test_wrap_angle_near_wraps_down_across_360():
+    assert ac.wrap_angle_near(359.0, 1.0) == pytest.approx(-1.0)
+    assert ac.wrap_angle_near(359.0, 1.0) - 1.0 == pytest.approx(-2.0)
+
+
+def test_wrap_angle_near_exactly_180_is_stable():
+    # the boundary case (either direction is equally short) shouldn't blow up
+    result = ac.wrap_angle_near(180.0, 0.0)
+    assert abs(result - 0.0) == pytest.approx(180.0)
+
+
+def test_rotate_vector_zero_rotation_is_identity():
+    assert ac.rotate_vector(3.0, 4.0, 0.0) == pytest.approx((3.0, 4.0))
+
+
+def test_rotate_vector_90deg():
+    x, y = ac.rotate_vector(1.0, 0.0, 90.0)
+    assert x == pytest.approx(0.0, abs=1e-9)
+    assert y == pytest.approx(1.0, abs=1e-9)
+
+
+def test_rotate_vector_180deg_negates():
+    x, y = ac.rotate_vector(3.0, -2.0, 180.0)
+    assert x == pytest.approx(-3.0)
+    assert y == pytest.approx(2.0)
+
+
 def test_scan_area_corners_unrotated_is_axis_aligned_bounding_box():
     corners = ac.scan_area_corners(100.0, 75.0, 200.0, 150.0, 0.0)
     xs = [c[0] for c in corners]

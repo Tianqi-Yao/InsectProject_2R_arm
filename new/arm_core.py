@@ -131,6 +131,32 @@ def _normalize_deg(angle_deg: float) -> float:
     return angle_deg % 360.0
 
 
+def wrap_angle_near(target_deg: float, reference_deg: float) -> float:
+    """The angle congruent to target_deg (mod 360) that's closest to
+    reference_deg -- e.g. target_deg=1, reference_deg=359 -> returns 361
+    (only 2deg from reference_deg, not the 358deg a raw subtraction would
+    suggest). Used wherever a "distance to travel" between two angles is
+    computed (motion_planning/trapezoidal.py, jog_controller.py's scan
+    waypoint sequencing): ik_solve()'s theta1/theta2 (hence the raw servo
+    angle) come from atan2, which has no reason to land near whatever the
+    arm's current angle happens to be, so treating a goal angle literally
+    (instead of picking its nearest equivalent first) can make a
+    trajectory planner sweep almost a full extra revolution to reach a
+    target that's physically only a couple degrees away."""
+    return reference_deg + ((target_deg - reference_deg + 180.0) % 360.0 - 180.0)
+
+
+def rotate_vector(dx: float, dy: float, rotation_deg: float) -> tuple[float, float]:
+    """Rotates a 2D vector (dx, dy) by rotation_deg (degrees, CCW) about
+    the origin. Shared by scan_area_corners() and manual_test/gui.py's
+    arrow-key jog (which nudges along the scan area's own tilted axes,
+    not the workspace frame's raw x/y, whenever it's been rotated -- see
+    arm_core.calib_scan_area)."""
+    theta = math.radians(rotation_deg)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+    return (dx * cos_t - dy * sin_t, dx * sin_t + dy * cos_t)
+
+
 def _point_in_polygon(x: float, y: float, polygon: list) -> bool:
     """Winding-number point-in-polygon test. `polygon` is a list of (x, y)
     vertices, implicitly closed (the last vertex connects back to the
@@ -854,12 +880,13 @@ def scan_area_corners(center_x_mm: float, center_y_mm: float, width_mm: float, h
     large enough to show the whole area, even the part sticking outside
     the calibration sheet) and manual_test/scan_area_gui.py (drawing +
     corner-handle hit-testing while fitting it)."""
-    theta = math.radians(rotation_deg)
-    cos_t, sin_t = math.cos(theta), math.sin(theta)
     local = [(-width_mm / 2, -height_mm / 2), (width_mm / 2, -height_mm / 2),
              (width_mm / 2, height_mm / 2), (-width_mm / 2, height_mm / 2)]
-    return [(center_x_mm + lx * cos_t - ly * sin_t, center_y_mm + lx * sin_t + ly * cos_t)
-            for lx, ly in local]
+    corners = []
+    for lx, ly in local:
+        rx, ry = rotate_vector(lx, ly, rotation_deg)
+        corners.append((center_x_mm + rx, center_y_mm + ry))
+    return corners
 
 
 def calib_joint_limits(calib: dict) -> Optional[dict]:

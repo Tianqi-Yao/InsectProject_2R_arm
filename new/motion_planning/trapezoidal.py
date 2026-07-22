@@ -38,6 +38,8 @@ from __future__ import annotations
 
 import math
 
+from arm_core import wrap_angle_near
+
 from . import TrajectoryPlanner, register
 
 
@@ -92,6 +94,15 @@ def _progress_at(t: float, t1: float, t2: float, v_entry: float,
 class TrapezoidalPlanner(TrajectoryPlanner):
     def plan_segment(self, start_deg, goal_deg, v_start_deg_s, v_end_deg_s,
                       vmax_deg_s, amax_deg_s2, dt_s):
+        # Re-express each goal as whichever angle congruent to it (mod
+        # 360) is nearest start_deg, BEFORE computing a distance to
+        # travel: goal_deg comes from ik_solve()'s atan2-based math (or a
+        # raw operator-typed angle), with no reason to land anywhere near
+        # the arm's current position numerically, even when it's only a
+        # couple degrees away physically (e.g. start=359, goal=1 is a
+        # 2deg move, not the 358deg a raw subtraction would compute) --
+        # see arm_core.wrap_angle_near.
+        goal_deg = tuple(wrap_angle_near(goal_deg[i], start_deg[i]) for i in (0, 1))
         D = [goal_deg[i] - start_deg[i] for i in (0, 1)]
         absD = [abs(d) for d in D]
 

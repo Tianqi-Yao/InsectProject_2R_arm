@@ -53,6 +53,25 @@ def test_lands_exactly_on_goal():
     assert samples[-1] == pytest.approx(goal)
 
 
+def test_wraps_around_360_instead_of_sweeping_the_long_way():
+    # start=359, goal=1 is a 2deg move physically (goal wraps to 361,
+    # right next to start) -- NOT the 358deg a raw subtraction would
+    # compute. Regression test for a real bug: without wrapping the goal
+    # to its nearest equivalent first, the arm would sweep almost an
+    # entire extra revolution to reach a target only a couple degrees
+    # away.
+    planner = mp.get_planner("trapezoidal")
+    start, goal = (359.0, 0.0), (1.0, 0.0)
+    samples = planner.plan_segment(start, goal, (0.0, 0.0), (0.0, 0.0),
+                                    (60.0, 60.0), (120.0, 120.0), DT)
+    for j1, _j2 in samples:
+        assert 358.0 <= j1 <= 362.0, f"swept way outside the ~2deg move: {j1}"
+    # lands on the equivalent angle nearest start (361), not the literal
+    # goal (1) -- that's what set_target_deg()'s own %360 wrapping expects.
+    assert samples[-1][0] == pytest.approx(361.0)
+    assert samples[-1][0] % 360.0 == pytest.approx(1.0)
+
+
 def test_zero_distance_returns_single_sample_at_goal():
     planner = mp.get_planner("trapezoidal")
     samples = planner.plan_segment((5.0, 5.0), (5.0, 5.0), (0.0, 0.0), (0.0, 0.0),

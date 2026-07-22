@@ -197,12 +197,14 @@ with a real-vs-target visualization):
 python3 manual_test/run.py     # terminal
 python3 manual_test/gui.py     # visual (needs a display)
 ```
-Arrow keys jog the end effector (nothing moves until you press a key),
-`[`/`]` change step size, `h` returns to the workspace center, `t` runs a
-serpentine scan sweep (`h` interrupts it and heads home, `q` aborts in
-place), `q`/ESC quits. Both tools read the same `calib.json` -- if you
-change scan density/speed, edit `calib.json`'s `motion` section once, not
-two separate hardcoded copies.
+Arrow keys jog the end effector (nothing moves until you press a key) --
+along the scan area's own tilted edges if you've rotated it (step 7),
+not raw world x/y, so pressing "up" always tracks one wall of the
+rectangle you're looking at -- `[`/`]` change step size, `h` returns to
+the scan area's center, `t` runs a serpentine scan sweep (`h` interrupts
+it and heads home, `q` aborts in place), `q`/ESC quits. Both tools read
+the same `calib.json` -- if you change scan density/speed, edit
+`calib.json`'s `motion` section once, not two separate hardcoded copies.
 
 **Interactive raw-angle jog** (for low-level debugging):
 ```bash

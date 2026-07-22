@@ -203,6 +203,13 @@ def draw_panel(surf, layout: Layout, font, sfont, info):
         row(" ", 13)
         row(" ", 22)
 
+    if abs(info["scan_rotation_deg"]) > 0.01:
+        row(f"scan area rotation: {info['scan_rotation_deg']:.1f} deg", 13, LABEL_C, sfont)
+        row("arrows move along ITS edges, not world x/y", 22, LABEL_C, sfont)
+    else:
+        row(" ", 13)
+        row(" ", 22)
+
     row("-- Keys --", 13, LABEL_C, sfont)
     for line in ["arrows   move target", "[ ]      step size",
                  "h        home", "t        positioning test",
@@ -282,16 +289,20 @@ def main():
                     elif event.key == pygame.K_t:
                         controller.start_scan(scan_path)
                     elif event.key == pygame.K_UP:
-                        new_t = controller.nudge_workspace(0.0, step, workspace_target)
+                        dx, dy = core.rotate_vector(0.0, step, scan_rot)
+                        new_t = controller.nudge_workspace(dx, dy, workspace_target)
                         workspace_target = new_t if new_t else workspace_target
                     elif event.key == pygame.K_DOWN:
-                        new_t = controller.nudge_workspace(0.0, -step, workspace_target)
+                        dx, dy = core.rotate_vector(0.0, -step, scan_rot)
+                        new_t = controller.nudge_workspace(dx, dy, workspace_target)
                         workspace_target = new_t if new_t else workspace_target
                     elif event.key == pygame.K_LEFT:
-                        new_t = controller.nudge_workspace(-step, 0.0, workspace_target)
+                        dx, dy = core.rotate_vector(-step, 0.0, scan_rot)
+                        new_t = controller.nudge_workspace(dx, dy, workspace_target)
                         workspace_target = new_t if new_t else workspace_target
                     elif event.key == pygame.K_RIGHT:
-                        new_t = controller.nudge_workspace(step, 0.0, workspace_target)
+                        dx, dy = core.rotate_vector(step, 0.0, scan_rot)
+                        new_t = controller.nudge_workspace(dx, dy, workspace_target)
                         workspace_target = new_t if new_t else workspace_target
 
             if now - last_poll >= POLL_INTERVAL_S:
@@ -320,6 +331,7 @@ def main():
                 "step": step,
                 "scan_active": controller.scan_active,
                 "scan_progress": controller.scan_progress,
+                "scan_rotation_deg": scan_rot,
             })
             pygame.display.flip()
             clock.tick(FPS)

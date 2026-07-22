@@ -41,7 +41,7 @@ from typing import Optional
 
 import motion_planning as mp
 from arm_core import (ArmParams, MotionConfig, calib_arm_params, calib_joint_limits,
-                       calib_motion_config, ik_solve, within_joint_limits)
+                       calib_motion_config, ik_solve, within_joint_limits, wrap_angle_near)
 from arm_hardware import STREAMING_ACC, STREAMING_SPEED
 
 logger = logging.getLogger("jog_controller")
@@ -203,6 +203,18 @@ class ArmController:
             else:
                 logger.warning("scan waypoint (%.1f, %.1f) unreachable or outside "
                                 "joint_limits_deg, skipping", x, y)
+        # Each waypoint's angle comes from an independent ik_solve() call,
+        # with no continuity guarantee from one to the next -- chain each
+        # one to its nearest equivalent (mod 360) relative to the PREVIOUS
+        # waypoint (seeded from the arm's current commanded position), so
+        # neither plan_segment()'s distance calc nor
+        # _corner_blend_velocity()'s direction vectors see a spurious
+        # ~360deg jump between two waypoints that are actually close
+        # together (see arm_core.wrap_angle_near).
+        prev = self._commanded
+        for i, (j1, j2) in enumerate(joint_targets):
+            prev = (wrap_angle_near(j1, prev[0]), wrap_angle_near(j2, prev[1]))
+            joint_targets[i] = prev
         self._scan = _ScanState(joint_targets=joint_targets, index=0)
         self._queue = []
         self._advance_scan()
