@@ -291,3 +291,46 @@ doesn't try to change); it saves a separate sub-rectangle
 (`motion.scan_center_x_mm`/`scan_center_y_mm`/`scan_width_mm`/
 `scan_height_mm`/`scan_rotation_deg`) that `generate_scan_path()` uses
 instead, falling back to the full sheet (unrotated) if never configured.
+
+## 8. Fixed-path inspection (no AprilTag calibration needed)
+
+`fixed_path_scan/` is fully independent of the camera/AprilTag pipeline: it
+only reads calib.json's kinematics, hardware, motion, and joint-limit
+sections (the same four sections `manual_test/gui.py`/`run.py` already
+treat as decoupled from the calibration sheet/homography concept) -- and
+drives the arm along a manually-taught fixed rectangle, stopping at every
+node to dwell (with a placeholder hook reserved for a real camera capture
+later, not wired up yet).
+
+```bash
+python3 fixed_path_scan/path_gui.py
+```
+
+Starts in TEACH mode:
+
+- arrow keys: jog the real arm (5mm per press)
+- `1`/`2`: record wherever the arm currently is as rectangle corner A/B --
+  no typed coordinates, no mouse dragging
+- `[`/`]`: cols -1/+1, `;`/`'`: rows -1/+1 (both floor at 2)
+- `-`/`=`: per-node dwell time -0.2s/+0.2s
+- the panel shows both corners' coordinates, rows/cols, the derived node
+  spacing (mm), and dwell time, live; the canvas overlays the generated
+  serpentine node preview -- each node a small dot, green if reachable, red
+  if it's outside the arm's IK/joint-limit range
+- `s`/Enter: save to `fixed_path_scan/path_config.json` (rig-specific
+  physical position data, same as calib.json -- already gitignored) and
+  write a screenshot to `fixed_path_scan/path_preview.png`
+- `p`: screenshot only, no save
+- `g`/Enter: once both corners are taught and every node is reachable,
+  actually run the path -- the arm visits every node in order, dwells the
+  configured time at each (this is when the `on_arrive` hook fires), then
+  moves to the next; returns to TEACH automatically once done
+- `q`/ESC aborts a run early at any time -- the arm just holds its last
+  commanded position, no in-flight segment is forcibly interrupted
+
+The real camera-capture code isn't wired up yet:
+`fixed_path_scan/path_core.py`'s `default_on_arrive(index, x_mm, y_mm,
+label)` is the reserved placeholder -- it currently just logs a line.
+Wire up a camera later by replacing that function (or passing a different
+`on_arrive` callback into `PathRunner`) -- the path generation and
+per-node dwell logic don't need to change at all.

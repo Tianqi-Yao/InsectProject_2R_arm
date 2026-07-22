@@ -18,6 +18,7 @@ new/calib.json
 new/calib_history/
 new/alarms.log
 new/tag_detect.jpg
+new/fixed_path_scan/path_config.json
 
 # Arduino build output, if compiled via arduino-cli
 build/
