@@ -54,6 +54,7 @@ GHOST_LINK1 = (80, 160, 255, 100)
 GHOST_LINK2 = (255, 120, 55, 100)
 GHOST_JOINT = (220, 220, 220, 100)
 TARGET_C = (255, 230, 80)
+SCAN_AREA_C = (255, 210, 60)
 TEXT_C = (200, 210, 225)
 LABEL_C = (110, 130, 155)
 HIGHLIGHT = (255, 220, 80)
@@ -62,38 +63,87 @@ EE_ERR = (220, 55, 55)
 
 @dataclass
 class Layout:
-    """Screen-space layout for a given workspace size -- pulled out of what
-    used to be module-level SCALE/WS_OX/WS_OY/WIN_W/WIN_H constants sized
-    for a hardcoded 200x150mm workspace, so the window sizes itself to
-    whatever calib.json's workspace actually is."""
-    ws_width_mm: float
-    ws_height_mm: float
+    """Screen-space layout for a given workspace-mm bounding box -- pulled
+    out of what used to be module-level SCALE/WS_OX/WS_OY/WIN_W/WIN_H
+    constants sized for a hardcoded 200x150mm workspace, so the window
+    sizes itself to whatever calib.json's workspace actually is.
+
+    `origin_x_mm`/`origin_y_mm` is the workspace point mapped to the
+    canvas's bottom-left -- 0,0 reproduces the old assumption that
+    everything of interest starts at the calibration sheet's own corner,
+    but that's no longer always true (see `fit()`): the jog/scan area can
+    now be a rotated rectangle sitting partly or wholly outside the
+    sheet, and the window needs to be big enough to show all of it, not
+    just clip it at the sheet's own edge."""
+    origin_x_mm: float
+    origin_y_mm: float
+    span_width_mm: float
+    span_height_mm: float
     scale: float = 2.0
     ws_ox: int = 55
     ws_oy: int = 30
 
     @property
     def win_w(self) -> int:
-        return int(self.ws_ox + self.ws_width_mm * self.scale) + 260
+        return int(self.ws_ox + self.span_width_mm * self.scale) + 260
 
     @property
     def win_h(self) -> int:
-        return int(self.ws_oy + self.ws_height_mm * self.scale) + 40
+        return int(self.ws_oy + self.span_height_mm * self.scale) + 40
 
     def ws2s(self, wx: float, wy: float) -> tuple:
         """Workspace mm -> screen px (Y flipped: workspace +Y = screen up)."""
-        return (int(self.ws_ox + wx * self.scale),
-                int(self.ws_oy + (self.ws_height_mm - wy) * self.scale))
+        return (int(self.ws_ox + (wx - self.origin_x_mm) * self.scale),
+                int(self.ws_oy + (self.origin_y_mm + self.span_height_mm - wy) * self.scale))
+
+    @classmethod
+    def fit(cls, sheet_width_mm: float, sheet_height_mm: float, scan_area, margin_mm: float = 15.0,
+            **kwargs) -> "Layout":
+        """Sized and positioned to cover BOTH the calibration sheet
+        ((0,0)-(sheet_width_mm,sheet_height_mm), fixed by the physical
+        AprilTag placement) and the jog/scan area (arm_core.calib_scan_area
+        -- independently positioned/sized/rotated, can extend outside the
+        sheet), with a little margin so edges/handles aren't drawn flush
+        against the window border. If the scan area has never been
+        configured (still equals the full sheet), this is identical to
+        the old sheet-only sizing."""
+        cx, cy, w, h, rotation_deg = scan_area
+        all_pts = (core.scan_area_corners(cx, cy, w, h, rotation_deg)
+                   + [(0.0, 0.0), (sheet_width_mm, 0.0),
+                      (sheet_width_mm, sheet_height_mm), (0.0, sheet_height_mm)])
+        min_x = min(p[0] for p in all_pts) - margin_mm
+        max_x = max(p[0] for p in all_pts) + margin_mm
+        min_y = min(p[1] for p in all_pts) - margin_mm
+        max_y = max(p[1] for p in all_pts) + margin_mm
+        return cls(origin_x_mm=min_x, origin_y_mm=min_y,
+                    span_width_mm=max_x - min_x, span_height_mm=max_y - min_y, **kwargs)
 
 
-def draw_workspace(surf, layout: Layout):
-    w, h = int(layout.ws_width_mm * layout.scale), int(layout.ws_height_mm * layout.scale)
-    pygame.draw.rect(surf, WS_FILL, (layout.ws_ox, layout.ws_oy, w, h))
-    for gx in range(0, int(layout.ws_width_mm) + 1, 25):
-        pygame.draw.line(surf, GRID, layout.ws2s(gx, 0), layout.ws2s(gx, layout.ws_height_mm))
-    for gy in range(0, int(layout.ws_height_mm) + 1, 25):
-        pygame.draw.line(surf, GRID, layout.ws2s(0, gy), layout.ws2s(layout.ws_width_mm, gy))
-    pygame.draw.rect(surf, WS_BORDER, (layout.ws_ox, layout.ws_oy, w, h), 2)
+def draw_workspace(surf, layout: Layout, sheet_width_mm: float, sheet_height_mm: float):
+    """Draws the AprilTag calibration sheet's own rectangle -- its true
+    (0,0)-(sheet_width_mm,sheet_height_mm) extent, which may now be only
+    part of a larger canvas (see Layout.fit)."""
+    top_left = layout.ws2s(0.0, sheet_height_mm)
+    w, h = int(sheet_width_mm * layout.scale), int(sheet_height_mm * layout.scale)
+    pygame.draw.rect(surf, WS_FILL, (top_left[0], top_left[1], w, h))
+    for gx in range(0, int(sheet_width_mm) + 1, 25):
+        pygame.draw.line(surf, GRID, layout.ws2s(gx, 0), layout.ws2s(gx, sheet_height_mm))
+    for gy in range(0, int(sheet_height_mm) + 1, 25):
+        pygame.draw.line(surf, GRID, layout.ws2s(0, gy), layout.ws2s(sheet_width_mm, gy))
+    pygame.draw.rect(surf, WS_BORDER, (top_left[0], top_left[1], w, h), 2)
+
+
+def draw_scan_area(surf, layout: Layout, scan_area):
+    """Highlights the jog/scan sub-rectangle -- see arm_core.calib_scan_area().
+    When it hasn't been configured (the sub-rectangle equals the full
+    sheet, unrotated), this just retraces the sheet's own border and is
+    easy to ignore. Can be tilted (scan_rotation_deg != 0) and/or extend
+    outside the sheet -- Layout.fit already sized the window to show all
+    of it -- so this draws the actual rotated quadrilateral, not an
+    axis-aligned pygame.draw.rect."""
+    cx, cy, w, h, rotation_deg = scan_area
+    points = [layout.ws2s(*c) for c in core.scan_area_corners(cx, cy, w, h, rotation_deg)]
+    pygame.draw.polygon(surf, SCAN_AREA_C, points, 2)
 
 
 def draw_solid_arm(surf, layout: Layout, base_xy, elbow, ee):
@@ -118,7 +168,7 @@ def draw_ghost_arm(surf, layout: Layout, base_xy, elbow, ee):
 
 
 def draw_panel(surf, layout: Layout, font, sfont, info):
-    px = int(layout.ws_ox + layout.ws_width_mm * layout.scale) + 24
+    px = int(layout.ws_ox + layout.span_width_mm * layout.scale) + 24
     py = 28
 
     def row(text, dy, color=TEXT_C, f=None):
@@ -169,13 +219,20 @@ def main():
     controller = jc.build_controller(servos, calib)
     params = controller.params
     ws = calib["workspace"]
-    layout = Layout(ws_width_mm=ws["width_mm"], ws_height_mm=ws["height_mm"])
-    home = (ws["width_mm"] / 2.0, ws["height_mm"] / 2.0)
+    # (center_x, center_y, width, height, rotation_deg) -- see manual_test/scan_area_gui.py
+    scan_area = core.calib_scan_area(calib)
+    scan_cx, scan_cy, scan_w, scan_h, scan_rot = scan_area
+    # Sized to show BOTH the calibration sheet and the scan area, even the
+    # part of it (if any) sticking outside the sheet -- see Layout.fit's
+    # docstring for why this can no longer just be the sheet's own size.
+    layout = Layout.fit(ws["width_mm"], ws["height_mm"], scan_area)
+    home = (scan_cx, scan_cy)
     scan_path = core.generate_scan_path(
-        width_mm=ws["width_mm"], height_mm=ws["height_mm"],
+        width_mm=scan_w, height_mm=scan_h,
         nx=controller.motion_cfg.scan_nx, ny=controller.motion_cfg.scan_ny,
         margin_mm=controller.motion_cfg.scan_margin_mm,
-        rows_limit=controller.motion_cfg.scan_rows_limit)
+        rows_limit=controller.motion_cfg.scan_rows_limit,
+        center_x_mm=scan_cx, center_y_mm=scan_cy, rotation_deg=scan_rot)
 
     pygame.init()
     pygame.display.set_caption("2R Arm -- real vs target")
@@ -249,7 +306,8 @@ def main():
             target_result = core.ik_solve(params, *workspace_target)
 
             screen.fill(BG)
-            draw_workspace(screen, layout)
+            draw_workspace(screen, layout, ws["width_mm"], ws["height_mm"])
+            draw_scan_area(screen, layout, scan_area)
             draw_ghost_arm(screen, layout, (params.base_x, params.base_y), cmd_elbow, cmd_ee)
             draw_solid_arm(screen, layout, (params.base_x, params.base_y), real_elbow, real_ee)
             draw_panel(screen, layout, font, sfont, {

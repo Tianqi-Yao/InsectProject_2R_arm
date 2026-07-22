@@ -32,12 +32,15 @@ STEP_MIN, STEP_MAX = 0.5, 40.0
 
 
 def run_jog(controller: jc.ArmController, calib: dict):
+    # (center_x, center_y, width, height, rotation_deg) -- see manual_test/scan_area_gui.py
+    scan_cx, scan_cy, scan_w, scan_h, scan_rot = core.calib_scan_area(calib)
     scan_path = core.generate_scan_path(
-        width_mm=calib["workspace"]["width_mm"], height_mm=calib["workspace"]["height_mm"],
+        width_mm=scan_w, height_mm=scan_h,
         nx=controller.motion_cfg.scan_nx, ny=controller.motion_cfg.scan_ny,
         margin_mm=controller.motion_cfg.scan_margin_mm,
-        rows_limit=controller.motion_cfg.scan_rows_limit)
-    home = (calib["workspace"]["width_mm"] / 2.0, calib["workspace"]["height_mm"] / 2.0)
+        rows_limit=controller.motion_cfg.scan_rows_limit,
+        center_x_mm=scan_cx, center_y_mm=scan_cy, rotation_deg=scan_rot)
+    home = (scan_cx, scan_cy)
 
     def loop(stdscr):
         curses.curs_set(0)

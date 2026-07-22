@@ -179,6 +179,30 @@ class with `@register("your_algo")`, add one import line at the bottom of
   physical mechanical stop is the only true hardware-level backstop; the
   software check is an earlier/clearer rejection, not a guarantee
   independent of this code being bug-free.
+- **Why the jog/scan area is independent of the calibration sheet's own
+  size**: `manual_test/gui.py`/`run.py` used to jog/scan exactly
+  `workspace.width_mm`/`height_mm` -- the AprilTag calibration sheet's own
+  dimensions. But that sheet's corners are wherever the tags happen to be
+  physically stuck down, with no guarantee that rectangle is fully inside
+  the arm's actual reachable+safe region (`joint_limits_deg`) -- and it
+  can't be "fixed" by changing `workspace.width_mm`/`height_mm`/
+  `corner_world_mm` in software, since those numbers have to match the
+  physical tag positions or the homography desyncs. `MotionConfig`'s
+  `scan_center_x_mm`/`scan_center_y_mm`/`scan_width_mm`/`scan_height_mm`/
+  `scan_rotation_deg` (`calib_scan_area()`) describe a separate, optional
+  sub-rectangle in that same coordinate frame -- as center+size+rotation
+  rather than min/max bounds, specifically because it can be tilted: a
+  rotated rectangle can cover more of an irregularly-shaped reachable
+  area than an axis-aligned one. Defaults to the full sheet, unrotated,
+  until configured; `generate_scan_path()` takes matching
+  `center_x_mm`/`center_y_mm`/`rotation_deg` parameters.
+  `manual_test/scan_area_gui.py` fits it visually: shades every workspace
+  point `ik_solve()` reports reachable (the same three-layer check
+  -- IK reach, independent joint ranges, coupled boundary -- every other
+  tool already enforces), and lets you drag the rectangle's corner
+  handles (resize), a dedicated handle above the top edge (rotate about
+  the center), or its interior (move) over that map rather than
+  hand-editing numbers.
 
 ## History
 

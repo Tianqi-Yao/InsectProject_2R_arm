@@ -436,29 +436,59 @@ def generate_calibration_targets(params: Optional[ArmParams] = None,
 
 def generate_scan_path(width_mm: float = 200.0, height_mm: float = 150.0,
                         nx: int = 50, ny: int = 40, margin_mm: float = 20.0,
-                        rows_limit: Optional[int] = None) -> list[tuple[float, float, str]]:
-    """Serpentine (boustrophedon) path across the workspace for the manual
-    jog tools' scan feature: starts at the top-left (x=0 side, y=max/"away
-    from base" side, matching the corner_world_mm "tl" convention above)
-    and snakes row by row -- left-to-right, down, right-to-left, down, ...
-    -- so there's no wasted travel back to a row's start.
+                        rows_limit: Optional[int] = None,
+                        center_x_mm: Optional[float] = None, center_y_mm: Optional[float] = None,
+                        rotation_deg: float = 0.0
+                        ) -> list[tuple[float, float, str]]:
+    """Serpentine (boustrophedon) path across a `width_mm` x `height_mm`
+    rectangle for the manual jog tools' scan feature: starts at the
+    top-left corner *of the rectangle* (matching the corner_world_mm "tl"
+    convention when rotation_deg is 0) and snakes row by row --
+    left-to-right, down, right-to-left, down, ... -- so there's no wasted
+    travel back to a row's start.
 
-    `rows_limit` truncates to just the first N rows (same spacing as the
-    full nx*ny grid, just fewer of them) -- handy for a quick check before
+    The grid is built in the rectangle's own local frame (centered on
+    (center_x_mm, center_y_mm), local +x/+y aligned with the rectangle's
+    own width/height axes before rotation), then rotated by
+    `rotation_deg` (degrees, CCW, about that center) and translated into
+    the workspace-mm frame -- see manual_test/scan_area_gui.py, which
+    fits this rectangle (position, size, AND rotation -- a tilted
+    rectangle can cover more of an irregularly-shaped reachable area than
+    an axis-aligned one) visually against what's actually reachable.
+
+    `center_x_mm`/`center_y_mm` default to (width_mm/2, height_mm/2) --
+    i.e. the rectangle's own bottom-left corner sits at the workspace
+    frame's origin with rotation_deg=0, matching this function's
+    behavior before the scan area became independent from the
+    calibration sheet's own size (see calib_scan_area()). `rows_limit`
+    truncates to just the first N rows (same spacing as the full nx*ny
+    grid, just fewer of them) -- handy for a quick check before
     committing to the full sweep.
 
     Previously duplicated near-identically in manual_test/run.py and
     manual_test/gui.py (and had silently drifted out of sync between the
     two copies); now the one place both read from.
     """
-    xs = [margin_mm + i * (width_mm - 2 * margin_mm) / (nx - 1) for i in range(nx)]
-    ys = [height_mm - margin_mm - j * (height_mm - 2 * margin_mm) / (ny - 1) for j in range(ny)]
+    if center_x_mm is None:
+        center_x_mm = width_mm / 2.0
+    if center_y_mm is None:
+        center_y_mm = height_mm / 2.0
+
+    xs_local = [-(width_mm / 2.0) + margin_mm + i * (width_mm - 2 * margin_mm) / (nx - 1)
+                for i in range(nx)]
+    ys_local = [(height_mm / 2.0) - margin_mm - j * (height_mm - 2 * margin_mm) / (ny - 1)
+                for j in range(ny)]
     if rows_limit is not None:
-        ys = ys[:rows_limit]
+        ys_local = ys_local[:rows_limit]
+
+    theta = math.radians(rotation_deg)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
     path = []
-    for row, y in enumerate(ys):
-        row_xs = xs if row % 2 == 0 else list(reversed(xs))
-        for x in row_xs:
+    for row, y_local in enumerate(ys_local):
+        row_xs = xs_local if row % 2 == 0 else list(reversed(xs_local))
+        for x_local in row_xs:
+            x = center_x_mm + x_local * cos_t - y_local * sin_t
+            y = center_y_mm + x_local * sin_t + y_local * cos_t
             path.append((x, y, f"row{row + 1}"))
     return path
 
@@ -585,6 +615,25 @@ class MotionConfig:
     scan_ny: int = 40
     scan_rows_limit: Optional[int] = None
     scan_margin_mm: float = 20.0
+    # The jog/scan sub-rectangle, in the same workspace-mm coordinate frame
+    # the AprilTag homography establishes -- deliberately independent of
+    # `workspace.width_mm`/`height_mm` (the calibration SHEET's own size,
+    # fixed by where the corner tags are physically stuck down; changing
+    # those numbers without moving the tags would desync the homography).
+    # Center+size+rotation (not min/max bounds) because it can be tilted:
+    # a rotated rectangle can cover more of an irregularly-shaped
+    # reachable area than an axis-aligned one. None (any of the first
+    # four) means "not configured yet" -> falls back to the full
+    # calibration sheet, i.e. today's behavior, so older calib.json files
+    # need no changes. See calib_scan_area() and
+    # manual_test/scan_area_gui.py, which fits this visually to whatever
+    # the arm can actually safely reach (joint_limits_deg), since the
+    # calibration sheet's placement has no guarantee of matching that.
+    scan_center_x_mm: Optional[float] = None
+    scan_center_y_mm: Optional[float] = None
+    scan_width_mm: Optional[float] = None
+    scan_height_mm: Optional[float] = None
+    scan_rotation_deg: float = 0.0
     # How aligned two consecutive scan segments' directions must be
     # (cosine of the angle between them) to coast through the corner
     # instead of stopping -- see jog_controller.py's corner-blending logic.
@@ -593,8 +642,16 @@ class MotionConfig:
 
     @classmethod
     def from_dict(cls, d: dict) -> "MotionConfig":
+        """Merges calib.json's motion section over the defaults. Silently
+        drops any key in `d` that isn't a current MotionConfig field --
+        e.g. a stale name left over from a schema change (a calib.json
+        saved under an older version of this field set, which a renamed/
+        removed field would otherwise turn into a hard crash here on
+        every load, for a field that isn't even being read for anything
+        anymore)."""
         defaults = asdict(cls())
-        return cls(**{**defaults, **d})
+        known = {k: v for k, v in d.items() if k in defaults}
+        return cls(**{**defaults, **known})
 
 
 def _default_calib() -> dict:
@@ -648,6 +705,29 @@ def _validate_calib(calib: dict) -> None:
     for name in ("homography_drift_halt_mm", "arm_position_halt_mm"):
         if calib.get("thresholds", {}).get(name) is None:
             raise ValueError(f"calib.json missing thresholds.{name}")
+
+    scan_shape = {k: calib.get("motion", {}).get(k) for k in
+                  ("scan_center_x_mm", "scan_center_y_mm", "scan_width_mm", "scan_height_mm")}
+    if any(v is not None for v in scan_shape.values()):
+        # Partially configured (some but not all four set) is treated the
+        # same as "none configured" by calib_scan_area()'s fallback, but
+        # is almost certainly a mistake (an incomplete manual edit, or a
+        # bug in whatever wrote it) -- catch it here rather than silently
+        # falling back to the full calibration sheet.
+        if any(v is None for v in scan_shape.values()):
+            raise ValueError(
+                f"calib.json motion.scan_{{center_x,center_y,width,height}}_mm must be "
+                f"either all four set or all four omitted, got {scan_shape}")
+        cx, cy, w, h = (scan_shape["scan_center_x_mm"], scan_shape["scan_center_y_mm"],
+                        scan_shape["scan_width_mm"], scan_shape["scan_height_mm"])
+        if not (math.isfinite(cx) and math.isfinite(cy) and math.isfinite(w) and math.isfinite(h)):
+            raise ValueError(f"calib.json motion scan area must be finite numbers, got {scan_shape}")
+        if not (w > 0 and h > 0):
+            raise ValueError(f"calib.json motion scan_width_mm/scan_height_mm must be "
+                              f"positive, got {scan_shape}")
+    rotation = calib.get("motion", {}).get("scan_rotation_deg")
+    if rotation is not None and not math.isfinite(rotation):
+        raise ValueError(f"calib.json motion.scan_rotation_deg={rotation} must be a finite number")
 
     joint_limits = calib.get("joint_limits_deg")
     if joint_limits is not None:
@@ -747,6 +827,39 @@ def calib_hardware_config(calib: dict) -> HardwareConfig:
 
 def calib_motion_config(calib: dict) -> MotionConfig:
     return MotionConfig.from_dict(calib.get("motion", {}))
+
+
+def calib_scan_area(calib: dict) -> tuple[float, float, float, float, float]:
+    """Returns (center_x_mm, center_y_mm, width_mm, height_mm, rotation_deg)
+    for the jog/scan sub-rectangle -- MotionConfig.scan_center_x_mm etc if
+    configured, otherwise the full calibration sheet, unrotated
+    (width_mm/2, height_mm/2, workspace.width_mm, workspace.height_mm, 0.0),
+    i.e. today's behavior. See manual_test/scan_area_gui.py to configure
+    this visually (position, size, AND rotation), fit to wherever the arm
+    can actually safely reach."""
+    mc = calib_motion_config(calib)
+    shape = (mc.scan_center_x_mm, mc.scan_center_y_mm, mc.scan_width_mm, mc.scan_height_mm)
+    if all(v is not None for v in shape):
+        return (*shape, mc.scan_rotation_deg)
+    ws = calib["workspace"]
+    return (ws["width_mm"] / 2.0, ws["height_mm"] / 2.0, ws["width_mm"], ws["height_mm"], 0.0)
+
+
+def scan_area_corners(center_x_mm: float, center_y_mm: float, width_mm: float, height_mm: float,
+                       rotation_deg: float) -> list[tuple[float, float]]:
+    """The 4 corners of a (possibly rotated) scan-area rectangle -- same
+    shape calib_scan_area() returns -- in workspace mm, ordered
+    bottom-left -> bottom-right -> top-right -> top-left (before
+    rotation). Shared by manual_test/gui.py (sizing/drawing its window
+    large enough to show the whole area, even the part sticking outside
+    the calibration sheet) and manual_test/scan_area_gui.py (drawing +
+    corner-handle hit-testing while fitting it)."""
+    theta = math.radians(rotation_deg)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+    local = [(-width_mm / 2, -height_mm / 2), (width_mm / 2, -height_mm / 2),
+             (width_mm / 2, height_mm / 2), (-width_mm / 2, height_mm / 2)]
+    return [(center_x_mm + lx * cos_t - ly * sin_t, center_y_mm + lx * sin_t + ly * cos_t)
+            for lx, ly in local]
 
 
 def calib_joint_limits(calib: dict) -> Optional[dict]:

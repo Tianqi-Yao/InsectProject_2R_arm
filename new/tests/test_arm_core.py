@@ -554,6 +554,59 @@ def test_generate_scan_path_rows_limit_truncates_without_changing_spacing():
     assert limited == full[:10]
 
 
+def test_generate_scan_path_default_center_matches_old_origin_convention():
+    # No center given -> defaults to (width/2, height/2), i.e. the
+    # rectangle's own bottom-left corner sits at the workspace origin --
+    # reproduces the function's behavior from before it had a center/
+    # rotation at all.
+    default = ac.generate_scan_path(width_mm=200.0, height_mm=150.0, nx=5, ny=4, margin_mm=20.0)
+    explicit = ac.generate_scan_path(width_mm=200.0, height_mm=150.0, nx=5, ny=4, margin_mm=20.0,
+                                      center_x_mm=100.0, center_y_mm=75.0)
+    assert default == explicit
+
+
+def test_generate_scan_path_center_shifts_every_point():
+    base = ac.generate_scan_path(width_mm=200.0, height_mm=150.0, nx=5, ny=4, margin_mm=20.0)
+    shifted = ac.generate_scan_path(width_mm=200.0, height_mm=150.0, nx=5, ny=4, margin_mm=20.0,
+                                     center_x_mm=130.0, center_y_mm=65.0)
+    assert len(base) == len(shifted)
+    for (bx, by, blabel), (sx, sy, slabel) in zip(base, shifted):
+        assert sx == pytest.approx(bx + 30.0)
+        assert sy == pytest.approx(by - 10.0)
+        assert slabel == blabel
+
+
+def test_generate_scan_path_rotation_90deg_swaps_axes():
+    # Rotating 90deg CCW about the center should turn the "width" extent
+    # into the "height" direction -- checked via the spread of x/y values
+    # rather than exact positions (the boustrophedon labeling also
+    # rotates with it).
+    unrotated = ac.generate_scan_path(width_mm=200.0, height_mm=100.0, nx=5, ny=3,
+                                       margin_mm=0.0, center_x_mm=0.0, center_y_mm=0.0)
+    rotated = ac.generate_scan_path(width_mm=200.0, height_mm=100.0, nx=5, ny=3,
+                                     margin_mm=0.0, center_x_mm=0.0, center_y_mm=0.0,
+                                     rotation_deg=90.0)
+    ux_span = max(p[0] for p in unrotated) - min(p[0] for p in unrotated)
+    uy_span = max(p[1] for p in unrotated) - min(p[1] for p in unrotated)
+    rx_span = max(p[0] for p in rotated) - min(p[0] for p in rotated)
+    ry_span = max(p[1] for p in rotated) - min(p[1] for p in rotated)
+    assert ux_span == pytest.approx(ry_span, abs=1e-6)
+    assert uy_span == pytest.approx(rx_span, abs=1e-6)
+
+
+def test_generate_scan_path_rotation_180deg_is_point_symmetric():
+    center = (50.0, 40.0)
+    base = ac.generate_scan_path(width_mm=200.0, height_mm=100.0, nx=5, ny=3, margin_mm=10.0,
+                                  center_x_mm=center[0], center_y_mm=center[1])
+    rotated = ac.generate_scan_path(width_mm=200.0, height_mm=100.0, nx=5, ny=3, margin_mm=10.0,
+                                     center_x_mm=center[0], center_y_mm=center[1], rotation_deg=180.0)
+    # every point should be reflected through the center
+    base_xy = {(round(x, 6), round(y, 6)) for x, y, _ in base}
+    reflected_rotated_xy = {(round(2 * center[0] - x, 6), round(2 * center[1] - y, 6))
+                             for x, y, _ in rotated}
+    assert base_xy == reflected_rotated_xy
+
+
 # ── 4. calib.json persistence ──────────────────────────────────────────
 
 def test_save_then_load_round_trip(tmp_path, monkeypatch):
@@ -613,11 +666,104 @@ def test_calib_motion_config_overrides_merge_with_defaults():
     assert motion_cfg.scan_ny == 40  # untouched fields keep their defaults
 
 
+def test_calib_motion_config_ignores_stale_fields_from_a_renamed_schema():
+    # A real calib.json saved under an older field name (e.g.
+    # scan_x_min_mm/scan_y_min_mm/scan_x_max_mm/scan_y_max_mm, before the
+    # scan area gained center+size+rotation) must not crash on load just
+    # because that key no longer matches a current MotionConfig field --
+    # it should be silently dropped, not raise a TypeError.
+    calib = ac._default_calib()
+    calib["motion"]["scan_x_min_mm"] = 40.0
+    calib["motion"]["scan_y_min_mm"] = 20.0
+    calib["motion"]["scan_x_max_mm"] = 160.0
+    calib["motion"]["scan_y_max_mm"] = 110.0
+    calib["motion"]["scan_nx"] = 10  # a real, current field, alongside the stale ones
+    motion_cfg = ac.calib_motion_config(calib)
+    assert motion_cfg.scan_nx == 10
+    assert motion_cfg.scan_center_x_mm is None  # stale keys ignored, current fields keep their defaults
+    ac._validate_calib(calib)  # should not raise either
+
+
 def test_validate_calib_does_not_require_hardware_or_motion_sections():
     calib = ac._default_calib()
     del calib["hardware"]
     del calib["motion"]
     ac._validate_calib(calib)  # should not raise
+
+
+# ── Scan area (independent of the AprilTag calibration sheet's own size) ──
+
+def test_calib_scan_area_defaults_to_full_calibration_sheet():
+    # Not configured (the common case, and every pre-existing calib.json)
+    # -> falls back to the calibration sheet's own dimensions, unrotated,
+    # centered -- i.e. the behavior before this concept existed.
+    calib = ac._default_calib()
+    assert ac.calib_scan_area(calib) == (100.0, 75.0, 200.0, 150.0, 0.0)
+
+
+def test_calib_scan_area_returns_configured_shape():
+    calib = ac._default_calib()
+    calib["motion"]["scan_center_x_mm"] = 100.0
+    calib["motion"]["scan_center_y_mm"] = 65.0
+    calib["motion"]["scan_width_mm"] = 120.0
+    calib["motion"]["scan_height_mm"] = 90.0
+    calib["motion"]["scan_rotation_deg"] = 15.0
+    assert ac.calib_scan_area(calib) == (100.0, 65.0, 120.0, 90.0, 15.0)
+
+
+def test_scan_area_corners_unrotated_is_axis_aligned_bounding_box():
+    corners = ac.scan_area_corners(100.0, 75.0, 200.0, 150.0, 0.0)
+    xs = [c[0] for c in corners]
+    ys = [c[1] for c in corners]
+    assert min(xs) == pytest.approx(0.0) and max(xs) == pytest.approx(200.0)
+    assert min(ys) == pytest.approx(0.0) and max(ys) == pytest.approx(150.0)
+
+
+def test_scan_area_corners_90deg_rotation_swaps_extent():
+    corners = ac.scan_area_corners(0.0, 0.0, 200.0, 100.0, 90.0)
+    xs = [c[0] for c in corners]
+    ys = [c[1] for c in corners]
+    assert max(xs) - min(xs) == pytest.approx(100.0)  # was the height
+    assert max(ys) - min(ys) == pytest.approx(200.0)  # was the width
+
+
+def test_validate_calib_accepts_valid_scan_shape():
+    calib = ac._default_calib()
+    calib["motion"]["scan_center_x_mm"] = 100.0
+    calib["motion"]["scan_center_y_mm"] = 65.0
+    calib["motion"]["scan_width_mm"] = 120.0
+    calib["motion"]["scan_height_mm"] = 90.0
+    calib["motion"]["scan_rotation_deg"] = 15.0
+    ac._validate_calib(calib)  # should not raise
+
+
+def test_validate_calib_rejects_partially_configured_scan_shape():
+    # Only some of the four set -- calib_scan_area's fallback can't tell
+    # this apart from "all four missing," so it's almost certainly a
+    # mistake (incomplete manual edit) rather than intentional.
+    calib = ac._default_calib()
+    calib["motion"]["scan_center_x_mm"] = 100.0
+    calib["motion"]["scan_width_mm"] = 120.0
+    # scan_center_y_mm/scan_height_mm left unset
+    with pytest.raises(ValueError):
+        ac._validate_calib(calib)
+
+
+def test_validate_calib_rejects_non_positive_scan_size():
+    calib = ac._default_calib()
+    calib["motion"]["scan_center_x_mm"] = 100.0
+    calib["motion"]["scan_center_y_mm"] = 65.0
+    calib["motion"]["scan_width_mm"] = 0.0  # invalid: not positive
+    calib["motion"]["scan_height_mm"] = 90.0
+    with pytest.raises(ValueError):
+        ac._validate_calib(calib)
+
+
+def test_validate_calib_rejects_non_finite_rotation():
+    calib = ac._default_calib()
+    calib["motion"]["scan_rotation_deg"] = float("nan")
+    with pytest.raises(ValueError):
+        ac._validate_calib(calib)
 
 
 # ── 5. Self-check (mocked hardware) ─────────────────────────────────────

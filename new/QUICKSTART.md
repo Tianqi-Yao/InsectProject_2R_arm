@@ -241,3 +241,51 @@ Once both camera and servos check out individually:
 All calibration state lives in `calib.json` (git-ignored --
 machine/robot-specific, regenerate locally rather than commit it;
 `calib.example.json` documents the schema).
+
+## 7. Fit the jog/scan area to what's actually reachable
+
+`manual_test/gui.py`/`run.py`'s jog/scan rectangle used to just be the
+AprilTag calibration sheet's own size (`workspace.width_mm`/`height_mm`)
+-- but that sheet's corners are wherever you physically stuck the tags,
+with no guarantee that matches the arm's actual reachable+safe region
+(`joint_limits_deg`, from step 4). If part of that rectangle turned out
+to be unreachable when jogging/scanning, fit a smaller, independently-
+positioned sub-rectangle instead:
+
+```bash
+python3 manual_test/scan_area_gui.py
+```
+
+A live pygame window shades every reachable+safe workspace point green
+(the same check `main.py jog`/scans already enforce -- IK reach + the
+independent joint ranges + the coupled boundary, all at once), draws the
+calibration sheet's own outline for reference (fixed, not editable here --
+changing it would need physically moving the AprilTags and rerunning
+`main.py homography`), and overlays the current jog/scan rectangle
+(defaults to the full sheet if you haven't configured this before), which
+can be tilted -- a rotated rectangle often covers more of an irregularly-
+shaped reachable area than an axis-aligned one:
+
+- drag a **corner handle** (yellow dot) to resize, symmetrically about
+  the current center
+- drag the **purple handle** above the top edge to rotate about the
+  center
+- drag **inside** the rectangle (away from any handle) to move it
+
+The border turns green when everything inside is reachable, red if any of
+it isn't. `f` resets to the full sheet (unrotated), `s`/Enter saves to
+calib.json AND writes a screenshot (`scan_area.png`, in the current
+directory -- a plain capture of the window, so what's saved is exactly
+what's in the picture, same convention as `trace_boundary_gui.py`), `q`/
+ESC quits without saving. Doesn't touch torque or move the arm at all --
+it only polls encoder angles to draw the current pose for reference, so
+it's safe to run any time; release torque by hand first (e.g. via
+`trace_boundary_gui.py`) if you want to walk the arm around to spot-check
+specific positions against the map.
+
+This does NOT change `workspace.width_mm`/`height_mm`/`corner_world_mm`
+(the calibration sheet's own size -- a physical fact this tool can't and
+doesn't try to change); it saves a separate sub-rectangle
+(`motion.scan_center_x_mm`/`scan_center_y_mm`/`scan_width_mm`/
+`scan_height_mm`/`scan_rotation_deg`) that `generate_scan_path()` uses
+instead, falling back to the full sheet (unrotated) if never configured.
