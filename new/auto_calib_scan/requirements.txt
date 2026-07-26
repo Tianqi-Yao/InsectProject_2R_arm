@@ -1,0 +1,32 @@
+# Dependencies for the STS3215 + camera + AprilTag stack (arm_core.py /
+# arm_hardware.py / motion_planning/ / jog_controller.py / main.py) plus
+# the manual_test/ tools.
+
+numpy>=1.24
+scipy>=1.10
+opencv-python-headless>=4.8   # headless: no GUI deps needed on the Pi
+pupil-apriltags>=1.0
+pygame>=2.1                    # manual_test/gui.py's visualizer (manual_test/run.py uses
+                                # the stdlib curses module instead, no extra dependency)
+matplotlib>=3.5                 # main.py set-joint-limits' traced-boundary diagram (Agg
+                                 # backend, headless-safe -- no display needed)
+
+# Feetech STS3215 bus servo SDK. The `feetech-servo-sdk` PyPI package
+# (import name `scservo_sdk`) turned out to only expose a low-level
+# Dynamixel-SDK-style API (PortHandler + PacketHandler(protocol_end) with
+# read/write<N>ByteTxRx(port, id, address, ...)) -- there's no high-level
+# sms_sts-style convenience class, despite that being the initial
+# assumption. arm_hardware.py's Servos talks the STS3215's register table
+# directly against this low-level API; if you're on a different SDK fork
+# that *does* expose a higher-level class, arm_hardware.py is the one file
+# to adjust (see its module docstring). Confirm what your install exposes:
+#   python -c "import scservo_sdk as s; print([n for n in dir(s) if not n.startswith('_')])"
+feetech-servo-sdk
+pyserial>=3.5
+
+# picamera2 is Raspberry Pi OS-specific and ships as a system package with
+# libcamera bindings that pip usually can't build correctly on its own.
+# Install it via apt instead of pip:
+#   sudo apt install -y python3-picamera2
+# If you must use a venv, create it with --system-site-packages so the
+# apt-installed picamera2 is visible inside it.

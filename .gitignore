@@ -19,6 +19,11 @@ new/calib_history/
 new/alarms.log
 new/tag_detect.jpg
 new/fixed_path_scan/path_config.json
+new/auto_calib_scan/calib.json
+new/auto_calib_scan/calib_history/
+new/auto_calib_scan/alarms.log
+new/auto_calib_scan/tag_detect.jpg
+new/auto_calib_scan/card_scan_config.json
 
 # Arduino build output, if compiled via arduino-cli
 build/
