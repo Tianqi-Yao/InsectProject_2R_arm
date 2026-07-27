@@ -19,6 +19,16 @@ why that tool's scans didn't hug the card tightly. This tool instead:
      mouse. The card can be anywhere the camera can see it that's also
      arm-reachable; there's nothing to jog into place.
 
+If the camera can't reliably auto-detect the card's tag (e.g. focus
+issues), camera_view_gui.py's 'j'/'1'/'2'/'m' keys let you jog the arm to
+two corners of the card by hand instead and save them to calib.json's
+card.manual_corner_a_mm/manual_corner_b_mm. This tool reads that manual
+rectangle (via card_core.sub_rect_from_corners) as a fallback: used
+automatically when the tag isn't detected, or forced with 'm' even when
+the tag IS detected but not trusted. Drawn in orange (MANUAL_C) instead of
+the auto-detected rectangle's yellow (CARD_C), so it's visually obvious
+which source is currently driving the scan.
+
 PREVIEW mode (default): detect the card (auto at startup, 'd' to redetect)
 + adjust rows/cols/dwell_s + live preview of the generated serpentine node
 path, with each node colored by IK reachability.
@@ -60,6 +70,7 @@ EE_C = (55, 215, 95)
 BASE_C = (200, 100, 55)
 GHOST_C = (170, 90, 220)
 CARD_C = (255, 210, 60)
+MANUAL_C = (255, 140, 60)
 NODE_OK_C = (80, 220, 130)
 NODE_BAD_C = (220, 80, 80)
 NODE_CUR_C = (255, 230, 80)
@@ -142,12 +153,23 @@ def _detect_card(arm_hw, calib: dict, card_cfg: "core.CardConfig"):
                                   card_cfg.height_mm, np.array(H))
 
 
+def _card_rect_from_manual(scan_area: tuple, card_cfg: "core.CardConfig"):
+    """The manually-jogged-and-saved fallback rectangle (see
+    camera_view_gui.py's 'j'/'1'/'2'/'m' keys), or None if it hasn't been
+    taught yet."""
+    if card_cfg.manual_corner_a_mm is None or card_cfg.manual_corner_b_mm is None:
+        return None
+    return cc.sub_rect_from_corners(scan_area, card_cfg.manual_corner_a_mm, card_cfg.manual_corner_b_mm)
+
+
 def main():
     calib = core.load_calib()
     hw_cfg = core.calib_hardware_config(calib)
     card_cfg = core.calib_card_config(calib)
 
-    arm_hw = hw.ArmHardware(hw_cfg.servo_port, hw_cfg.joint_ids)
+    arm_hw = hw.ArmHardware(hw_cfg.servo_port, hw_cfg.joint_ids,
+                            camera_backend=hw_cfg.camera_backend,
+                            usb_camera_index=hw_cfg.usb_camera_index)
     arm_hw.connect()
 
     controller = jc.build_controller(arm_hw.servos, calib)
@@ -157,7 +179,16 @@ def main():
     uncalibrated = _looks_uncalibrated(params)
     homography_missing = calib["homography"].get("H") is None
 
-    card_rect = _detect_card(arm_hw, calib, card_cfg)
+    scan_area = core.calib_scan_area(calib)
+    auto_rect = _detect_card(arm_hw, calib, card_cfg)
+    manual_rect = _card_rect_from_manual(scan_area, card_cfg)
+    if auto_rect is not None:
+        card_source = "auto"
+    elif manual_rect is not None:
+        card_source = "manual"
+    else:
+        card_source = None
+    card_rect = auto_rect if card_source == "auto" else manual_rect
     card_msg = "" if card_rect is not None else "no card detected yet -- press 'd'"
 
     max_r = params.L1 + params.L2
@@ -200,17 +231,42 @@ def main():
                     elif mode == "run":
                         pass  # ignore all other keys while a run is in progress
                     elif event.key == pygame.K_d:
-                        detected = _detect_card(arm_hw, calib, card_cfg)
-                        if detected is not None:
-                            card_rect = detected
+                        new_rect = _detect_card(arm_hw, calib, card_cfg)
+                        if new_rect is not None:
+                            auto_rect = new_rect
+                            if card_source != "manual":
+                                card_source = "auto"
                             card_msg = ""
-                            msg = f"card detected: center=({card_rect[0]:.1f}, {card_rect[1]:.1f})mm rot={card_rect[4]:.1f}deg"
+                            msg = f"card detected: center=({auto_rect[0]:.1f}, {auto_rect[1]:.1f})mm rot={auto_rect[4]:.1f}deg"
                         else:
+                            # A transient miss must not discard an
+                            # already-known-good auto_rect (same contract
+                            # as arm_core.detect_card_rect itself) --
+                            # leave card_source/auto_rect untouched unless
+                            # there was never a good detection to begin
+                            # with, in which case fall back to manual if
+                            # one's available.
                             card_msg = ("homography not configured -- run main.py homography first"
                                         if homography_missing else
                                         f"card tag {card_cfg.tag_id} not seen -- check position/lighting")
+                            if card_source is None and manual_rect is not None:
+                                card_source = "manual"
+                                card_msg += " -- fell back to manual rect"
                             msg = card_msg
+                        card_rect = auto_rect if card_source == "auto" else manual_rect
                         msg_until = now + 4.0
+                    elif event.key == pygame.K_m:
+                        if card_source == "manual" and auto_rect is not None:
+                            card_source = "auto"
+                            msg = "switched to auto (tag-detected) card rect"
+                        elif manual_rect is not None:
+                            card_source = "manual"
+                            msg = "switched to manual card rect"
+                        else:
+                            msg = ("no manual card rect configured yet -- teach one with "
+                                    "camera_view_gui.py's 'j'/'1'/'2'/'m' keys first")
+                        card_rect = auto_rect if card_source == "auto" else manual_rect
+                        msg_until = now + 3.0
                     elif event.key == pygame.K_LEFTBRACKET:
                         cfg.cols = max(cfg.cols - 1, 2)
                     elif event.key == pygame.K_RIGHTBRACKET:
@@ -276,7 +332,8 @@ def main():
             nodes = []
             if card_rect is not None:
                 card_points = [layout.ws2s(*c) for c in core.scan_area_corners(*card_rect)]
-                pygame.draw.polygon(screen, CARD_C, card_points, 2)
+                rect_color = MANUAL_C if card_source == "manual" else CARD_C
+                pygame.draw.polygon(screen, rect_color, card_points, 2)
 
                 nodes = cc.generate_node_path(cfg, card_rect)
                 colored = _reachable_nodes(nodes, params, controller.joint_limits)
@@ -326,11 +383,13 @@ def main():
                 row(" ", 22)
 
             if card_rect is not None:
-                row(f"card: ({card_rect[0]:.1f}, {card_rect[1]:.1f})mm "
+                row(f"card [{card_source}]: ({card_rect[0]:.1f}, {card_rect[1]:.1f})mm "
                     f"rot={card_rect[4]:.1f}deg", 16, LABEL_C, sfont)
             else:
                 row(f"card: {card_msg or 'not detected'}", 16, WARN_C, sfont)
-            row(f"tag_id={card_cfg.tag_id}  size={card_cfg.width_mm:.1f}x{card_cfg.height_mm:.1f}mm", 22,
+            row(f"tag_id={card_cfg.tag_id}  size={card_cfg.width_mm:.1f}x{card_cfg.height_mm:.1f}mm", 16,
+                LABEL_C, sfont)
+            row(f"manual rect: {'available' if manual_rect is not None else 'not taught yet'}", 22,
                 LABEL_C, sfont)
 
             row(f"rows={cfg.rows}  cols={cfg.cols}  dwell={cfg.dwell_s:.1f}s", 22, LABEL_C, sfont)
@@ -348,6 +407,7 @@ def main():
 
             row("-- Keys --", 13, LABEL_C, sfont)
             for line in ["d         (re)detect the card",
+                         "m         switch auto (tag) / manual card rect",
                          "[ ]       cols -/+   ; '   rows -/+",
                          ", .       dwell -/+ 0.2s",
                          "s         save config + screenshot",

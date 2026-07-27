@@ -34,8 +34,8 @@
     "computed_at": null
   },
   "kinematics": {
-    "L1": 125.0,
-    "L2": 95.0,
+    "L1": 115.0,
+    "L2": 155.0,
     "base_x": 100.0,
     "base_y": -45.0,
     "servo1_offset_deg": 179.297,

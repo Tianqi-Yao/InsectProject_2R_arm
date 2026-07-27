@@ -50,7 +50,9 @@
     "joint_ids": {
       "joint1": 1,
       "joint2": 2
-    }
+    },
+    "camera_backend": "picamera2",
+    "usb_camera_index": 0
   },
   "motion": {
     "planner_name": "trapezoidal",

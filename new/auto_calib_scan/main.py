@@ -36,7 +36,9 @@ def load_calib_and_hardware(args) -> tuple[dict, hw.ArmHardware, str]:
     calib = core.load_calib()
     hw_cfg = core.calib_hardware_config(calib)
     port = args.port or hw_cfg.servo_port
-    h = hw.ArmHardware(servo_port=port, joint_ids=hw_cfg.joint_ids)
+    h = hw.ArmHardware(servo_port=port, joint_ids=hw_cfg.joint_ids,
+                       camera_backend=hw_cfg.camera_backend,
+                       usb_camera_index=hw_cfg.usb_camera_index)
     return calib, h, port
 
 

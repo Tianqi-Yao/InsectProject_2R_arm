@@ -855,18 +855,59 @@ def calib_motion_config(calib: dict) -> MotionConfig:
     return MotionConfig.from_dict(calib.get("motion", {}))
 
 
+def _fit_scan_rect_from_corners(corners: list[tuple[float, float]]) -> tuple[float, float, float, float, float]:
+    """Fit a rotated rectangle (center, width, height, rotation_deg) to a
+    quadrilateral defined by four world-space corner points.
+
+    This mirrors the compatibility approximation used by
+    manual_test/scan_area_gui_4.py's _quad_to_rect(): width/height are the
+    average of the opposite-edge lengths, and rotation is taken from the
+    bottom edge (bl->br), so the resulting rectangle's corners line up with
+    the same visual intent as the four-point editor."""
+    if len(corners) != 4:
+        raise ValueError(f"need 4 corners to fit a rectangle, got {len(corners)}")
+
+    bl, br, tr, tl = corners
+    cx = (bl[0] + br[0] + tr[0] + tl[0]) / 4.0
+    cy = (bl[1] + br[1] + tr[1] + tl[1]) / 4.0
+    width = (math.dist(bl, br) + math.dist(tl, tr)) / 2.0
+    height = (math.dist(bl, tl) + math.dist(br, tr)) / 2.0
+    rotation_deg = math.degrees(math.atan2(br[1] - bl[1], br[0] - bl[0]))
+    return (float(cx), float(cy), max(width, 1e-6), max(height, 1e-6), float(rotation_deg))
+
+
 def calib_scan_area(calib: dict) -> tuple[float, float, float, float, float]:
     """Returns (center_x_mm, center_y_mm, width_mm, height_mm, rotation_deg)
-    for the jog/scan sub-rectangle -- MotionConfig.scan_center_x_mm etc if
-    configured, otherwise the full calibration sheet, unrotated
-    (width_mm/2, height_mm/2, workspace.width_mm, workspace.height_mm, 0.0),
-    i.e. today's behavior. See manual_test/scan_area_gui.py to configure
-    this visually (position, size, AND rotation), fit to wherever the arm
-    can actually safely reach."""
+    for the jog/scan sub-rectangle.
+
+    The new manual_test/scan_area_gui_4.py saves both the canonical four
+    corner points and the rectangle approximation that older tools expect
+    (scan_center_x_mm etc). When those rectangle fields are present, they are
+    the authoritative compatibility values for gui.py and the scan path
+    generator, because they are exactly what the four-corner editor wrote.
+    The corner points are only used as a fallback for older/calibration files
+    that do not yet have those rectangle fields populated."""
     mc = calib_motion_config(calib)
     shape = (mc.scan_center_x_mm, mc.scan_center_y_mm, mc.scan_width_mm, mc.scan_height_mm)
     if all(v is not None for v in shape):
         return (*shape, mc.scan_rotation_deg)
+
+    motion = calib.get("motion", {})
+    corner_names = ("bl", "br", "tr", "tl")
+    corner_points = []
+    for name in corner_names:
+        x = motion.get(f"scan_corner_{name}_x_mm")
+        y = motion.get(f"scan_corner_{name}_y_mm")
+        if x is None or y is None:
+            corner_points = []
+            break
+        corner_points.append((float(x), float(y)))
+    if corner_points:
+        try:
+            return _fit_scan_rect_from_corners(corner_points)
+        except ValueError:
+            pass
+
     ws = calib["workspace"]
     return (ws["width_mm"] / 2.0, ws["height_mm"] / 2.0, ws["width_mm"], ws["height_mm"], 0.0)
 

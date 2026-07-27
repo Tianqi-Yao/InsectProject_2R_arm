@@ -800,6 +800,35 @@ def test_validate_calib_accepts_valid_scan_shape():
     ac._validate_calib(calib)  # should not raise
 
 
+def test_calib_scan_area_uses_corner_points_when_present():
+    calib = ac._default_calib()
+    calib["motion"]["scan_center_x_mm"] = 10.0
+    calib["motion"]["scan_center_y_mm"] = 20.0
+    calib["motion"]["scan_width_mm"] = 5.0
+    calib["motion"]["scan_height_mm"] = 5.0
+    calib["motion"]["scan_rotation_deg"] = 0.0
+
+    center = (120.0, 80.0)
+    width, height = 80.0, 60.0
+    rotation_deg = 30.0
+    corners = [
+        (-width / 2.0, -height / 2.0),
+        (width / 2.0, -height / 2.0),
+        (width / 2.0, height / 2.0),
+        (-width / 2.0, height / 2.0),
+    ]
+    rotated = [ac.rotate_vector(x, y, rotation_deg) for x, y in corners]
+    world = [(center[0] + rx, center[1] + ry) for rx, ry in rotated]
+    for name, (x, y) in zip(("bl", "br", "tr", "tl"), world):
+        calib["motion"][f"scan_corner_{name}_x_mm"] = x
+        calib["motion"][f"scan_corner_{name}_y_mm"] = y
+
+    rect = ac.calib_scan_area(calib)
+    assert rect[0:2] == pytest.approx(center)
+    assert rect[2:4] == pytest.approx((width, height))
+    assert rect[4] == pytest.approx(rotation_deg)
+
+
 def test_validate_calib_rejects_partially_configured_scan_shape():
     # Only some of the four set -- calib_scan_area's fallback can't tell
     # this apart from "all four missing," so it's almost certainly a

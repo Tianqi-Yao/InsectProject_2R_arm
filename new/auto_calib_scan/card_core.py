@@ -9,15 +9,16 @@ physical card (see arm_core.detect_card_rect), so it tracks wherever the
 card actually is instead of trusting hand-taught points against
 potentially-imprecise kinematics.
 
-CardScanConfig only holds rows/cols/dwell_s -- no corner_a_mm/corner_b_mm,
-since there's nothing to teach anymore. generate_node_path() takes the
-freshly-detected card_rect (center_x, center_y, width_mm, height_mm,
-rotation_deg -- the exact same shape arm_core.calib_scan_area()/
-scan_area_corners() already use) directly, straight from
-arm_core.generate_scan_path -- no corner->rectangle conversion step is
-needed here (that was sub_rect_from_corners's job in fixed_path_scan,
-specific to turning two taught points into a rectangle; a detected card
-already IS one).
+CardScanConfig only holds rows/cols/dwell_s -- the taught-corners fallback
+(see sub_rect_from_corners below) lives in calib.json's card section
+(arm_core.CardConfig.manual_corner_a_mm/b_mm) instead, since it's rig
+state, not a per-scan-session grid setting. generate_node_path() takes a
+card_rect (center_x, center_y, width_mm, height_mm, rotation_deg -- the
+exact same shape arm_core.calib_scan_area()/scan_area_corners() already
+use) directly, straight from arm_core.generate_scan_path -- regardless of
+whether that card_rect came from a live AprilTag detection
+(arm_core.detect_card_rect) or from sub_rect_from_corners's manual
+fallback below.
 
 PathRunner/default_on_arrive are copied verbatim from
 fixed_path_scan/path_core.py -- the "visit each node, stop, dwell, call a
@@ -66,6 +67,34 @@ def save_card_scan_config(cfg: CardScanConfig, path: Optional[Path] = None) -> N
     path = path or CARD_SCAN_CONFIG_PATH
     with open(path, "w") as f:
         json.dump(asdict(cfg), f, indent=2)
+
+
+def sub_rect_from_corners(scan_area: tuple, corner_a: tuple, corner_b: tuple) -> tuple:
+    """Two manually-jogged-and-recorded corners (world mm) -> a
+    (center_x_mm, center_y_mm, width_mm, height_mm, rotation_deg) card
+    rectangle, with rotation INHERITED from scan_area's own rotation_deg --
+    same geometry as fixed_path_scan/path_core.py's identically-named
+    function (independently copied here, not imported, per this folder's
+    self-contained-fork convention).
+
+    This is the manual fallback for arm_core.detect_card_rect() when the
+    camera can't reliably auto-detect the card's tag (e.g. focus issues):
+    jog the arm to two opposite corners of the physical card and record
+    them (see camera_view_gui.py's 'j'/'1'/'2' keys), instead of trusting
+    a live AprilTag detection.
+
+    Works by converting both corners into scan_area's own local frame
+    (world-to-local, the inverse of the rotation arm_core.scan_area_corners
+    applies to go local-to-world), taking their bounding box THERE (where
+    the frame is unrotated, so it's a plain min/max), then converting the
+    resulting local center back to world coordinates."""
+    cx, cy, _w, _h, rotation_deg = scan_area
+    lx1, ly1 = core.rotate_vector(corner_a[0] - cx, corner_a[1] - cy, -rotation_deg)
+    lx2, ly2 = core.rotate_vector(corner_b[0] - cx, corner_b[1] - cy, -rotation_deg)
+    local_cx, local_cy = (lx1 + lx2) / 2.0, (ly1 + ly2) / 2.0
+    width, height = abs(lx2 - lx1), abs(ly2 - ly1)
+    world_dx, world_dy = core.rotate_vector(local_cx, local_cy, rotation_deg)
+    return (cx + world_dx, cy + world_dy, width, height, rotation_deg)
 
 
 def generate_node_path(cfg: CardScanConfig, card_rect: tuple) -> list[tuple[float, float, str]]:

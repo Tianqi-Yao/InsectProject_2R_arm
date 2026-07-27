@@ -278,3 +278,123 @@ def test_card_scan_config_ignores_stale_unknown_fields(tmp_path):
         json.dump({"rows": 5, "cols": 4, "dwell_s": 1.5, "corner_a_mm": [1, 2]}, f)
     loaded = cc.load_card_scan_config(path)
     assert loaded == cc.CardScanConfig(rows=5, cols=4, dwell_s=1.5)
+
+
+# ── camera backend config (Camera/USB webcam vs picamera2) ──────────────
+
+def test_calib_hardware_config_defaults_to_picamera2():
+    calib = core._default_calib()
+    cfg = core.calib_hardware_config(calib)
+    assert cfg.camera_backend == "picamera2"
+    assert cfg.usb_camera_index == 0
+
+
+def test_calib_hardware_config_reads_usb_backend():
+    calib = core._default_calib()
+    calib["hardware"]["camera_backend"] = "usb"
+    calib["hardware"]["usb_camera_index"] = 2
+    cfg = core.calib_hardware_config(calib)
+    assert cfg.camera_backend == "usb"
+    assert cfg.usb_camera_index == 2
+
+
+def test_validate_calib_rejects_unknown_camera_backend():
+    calib = core._default_calib()
+    calib["hardware"]["camera_backend"] = "some_other_camera"
+    with pytest.raises(ValueError):
+        core._validate_calib(calib)
+
+
+def test_validate_calib_rejects_negative_usb_camera_index():
+    calib = core._default_calib()
+    calib["hardware"]["camera_backend"] = "usb"
+    calib["hardware"]["usb_camera_index"] = -1
+    with pytest.raises(ValueError):
+        core._validate_calib(calib)
+
+
+def test_validate_calib_accepts_missing_hardware_section():
+    calib = core._default_calib()
+    del calib["hardware"]
+    core._validate_calib(calib)  # must not raise -- optional section
+
+
+def test_arm_hardware_wires_camera_backend_and_usb_index_through():
+    # Wiring check only -- ArmHardware.connect()/Camera.connect() need
+    # real hardware (picamera2 or an actual USB device) and are treated as
+    # an untested black box everywhere else in this project; this just
+    # confirms the constructor threads the two new fields to the right
+    # place, not that a real camera opens.
+    import arm_hardware as ahw
+    h = ahw.ArmHardware("/dev/fake", {"joint1": 1, "joint2": 2},
+                         camera_backend="usb", usb_camera_index=3)
+    assert h.camera.backend == "usb"
+    assert h.camera.usb_index == 3
+
+
+# ── manual card-corner fallback (camera focus issues) ───────────────────
+
+def test_calib_card_config_manual_corners_default_none():
+    calib = core._default_calib()
+    cfg = core.calib_card_config(calib)
+    assert cfg.manual_corner_a_mm is None
+    assert cfg.manual_corner_b_mm is None
+
+
+def test_calib_card_config_reads_manual_corners():
+    calib = core._default_calib()
+    calib["card"]["manual_corner_a_mm"] = [10.0, 20.0]
+    calib["card"]["manual_corner_b_mm"] = [30.0, 40.0]
+    cfg = core.calib_card_config(calib)
+    assert cfg.manual_corner_a_mm == (10.0, 20.0)
+    assert cfg.manual_corner_b_mm == (30.0, 40.0)
+
+
+def test_validate_calib_rejects_partial_manual_corners():
+    calib = core._default_calib()
+    calib["card"]["manual_corner_a_mm"] = [10.0, 20.0]
+    # manual_corner_b_mm left unset -- a partial pair.
+    with pytest.raises(ValueError):
+        core._validate_calib(calib)
+
+
+def test_validate_calib_rejects_malformed_manual_corner():
+    calib = core._default_calib()
+    calib["card"]["manual_corner_a_mm"] = [10.0]  # wrong length
+    calib["card"]["manual_corner_b_mm"] = [30.0, 40.0]
+    with pytest.raises(ValueError):
+        core._validate_calib(calib)
+
+
+def test_validate_calib_accepts_both_manual_corners_set():
+    calib = core._default_calib()
+    calib["card"]["manual_corner_a_mm"] = [10.0, 20.0]
+    calib["card"]["manual_corner_b_mm"] = [30.0, 40.0]
+    core._validate_calib(calib)  # must not raise
+
+
+def test_sub_rect_from_corners_matches_axis_aligned_when_scan_area_unrotated():
+    scan_area = (0.0, 0.0, 999.0, 999.0, 0.0)
+    result = cc.sub_rect_from_corners(scan_area, (0.0, 0.0), (100.0, 60.0))
+    assert result == pytest.approx((50.0, 30.0, 100.0, 60.0, 0.0))
+
+
+def test_sub_rect_from_corners_order_independent():
+    scan_area = (0.0, 0.0, 999.0, 999.0, 0.0)
+    a = cc.sub_rect_from_corners(scan_area, (10.0, 80.0), (90.0, 20.0))
+    b = cc.sub_rect_from_corners(scan_area, (90.0, 20.0), (10.0, 80.0))
+    assert a == pytest.approx(b)
+    assert a == pytest.approx((50.0, 50.0, 80.0, 60.0, 0.0))
+
+
+def test_sub_rect_from_corners_inherits_scan_area_rotation():
+    # Hand-computed (same worked example as fixed_path_scan's own
+    # sub_rect_from_corners tests): scan_area centered at (50,50), rotated
+    # 90deg. corner_a sits exactly at the scan area's own center (local
+    # (0,0)); corner_b is offset by world (30,10) from it, which
+    # rotate_vector(30,10,-90) maps to local (10,-30). Local bounding box
+    # -> center (5,-15), w=10, h=30; converting that local center back to
+    # world (rotate_vector(5,-15,90) = (15,5)) gives world center (65,55).
+    scan_area = (50.0, 50.0, 999.0, 999.0, 90.0)
+    result = cc.sub_rect_from_corners(scan_area, (50.0, 50.0), (80.0, 60.0))
+    assert result == pytest.approx((65.0, 55.0, 10.0, 30.0, 90.0))

@@ -86,7 +86,8 @@ def _load_gui_module():
 
 
 def _fake_calib(with_homography=True, card_tag_id=CARD_TAG_ID,
-                 card_width_mm=CARD_WIDTH_MM, card_height_mm=CARD_HEIGHT_MM):
+                 card_width_mm=CARD_WIDTH_MM, card_height_mm=CARD_HEIGHT_MM,
+                 manual_corner_a_mm=None, manual_corner_b_mm=None):
     def fake_load_calib(path=None):
         calib = ac._default_calib()
         calib["kinematics"] = {
@@ -97,6 +98,9 @@ def _fake_calib(with_homography=True, card_tag_id=CARD_TAG_ID,
         calib["hardware"] = {"servo_port": "/dev/fake", "joint_ids": {"joint1": 1, "joint2": 2}}
         calib["joint_limits_deg"] = None
         calib["card"] = {"tag_id": card_tag_id, "width_mm": card_width_mm, "height_mm": card_height_mm}
+        if manual_corner_a_mm is not None:
+            calib["card"]["manual_corner_a_mm"] = list(manual_corner_a_mm)
+            calib["card"]["manual_corner_b_mm"] = list(manual_corner_b_mm)
         if with_homography:
             calib["homography"]["H"] = _make_H()
         return calib
@@ -124,7 +128,7 @@ class FakeServosStatic:
 
 
 class FakeCamera:
-    def __init__(self, resolution=(1920, 1080)):
+    def __init__(self, resolution=(1920, 1080), backend="picamera2", usb_index=0):
         pass
 
     def connect(self):
@@ -379,3 +383,136 @@ def test_card_gui_never_touches_torque(monkeypatch):
     monkeypatch.setattr(pygame.event, "get", _scripted_event_get(script))
 
     _load_gui_module().main()  # would raise via FakeServosStatic if violated
+
+
+# ── Manual card-rect fallback (camera_view_gui.py's 'j'/'1'/'2'/'m' teach) ──
+
+MANUAL_CORNER_A = (80.0, 60.0)
+MANUAL_CORNER_B = (120.0, 90.0)
+DEFAULT_SCAN_AREA = (100.0, 75.0, 200.0, 150.0, 0.0)  # calib_scan_area's fallback (no motion.scan_* set)
+
+
+def test_card_gui_falls_back_to_manual_rect_when_tag_never_detected(monkeypatch):
+    monkeypatch.setattr(ac, "load_calib", _fake_calib(
+        manual_corner_a_mm=MANUAL_CORNER_A, manual_corner_b_mm=MANUAL_CORNER_B))
+    _install_fake_hardware(monkeypatch, [{}])  # tag never seen, at startup or on 'd'
+    cfg = cc.CardScanConfig(rows=2, cols=2, dwell_s=0.0)
+    monkeypatch.setattr(cc, "load_card_scan_config", lambda path=None: cfg)
+
+    manual_rect = cc.sub_rect_from_corners(DEFAULT_SCAN_AREA, MANUAL_CORNER_A, MANUAL_CORNER_B)
+    expected_nodes = cc.generate_node_path(cfg, manual_rect)
+
+    arrivals = []
+    monkeypatch.setattr(cc, "default_on_arrive",
+                         lambda i, x, y, label: arrivals.append((i, x, y, label)))
+
+    script = {
+        5: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_g, mod=0)],
+        3000: [pygame.event.Event(pygame.QUIT)],
+    }
+    monkeypatch.setattr(pygame.event, "get", _scripted_event_get(script))
+
+    _load_gui_module().main()
+
+    assert len(arrivals) == len(expected_nodes) == 4
+    for (idx, x, y, label), (ex, ey, elabel) in zip(arrivals, expected_nodes):
+        assert x == pytest.approx(ex)
+        assert y == pytest.approx(ey)
+
+
+def test_card_gui_m_key_switches_to_manual_rect_even_when_tag_detected(monkeypatch):
+    # Both sources available: tag IS detected, but a manual rect is also
+    # configured. 'm' must force the run to use the manual rect instead of
+    # the (successfully) auto-detected one -- the explicit override for
+    # "tag detected but camera focus makes it untrustworthy".
+    monkeypatch.setattr(ac, "load_calib", _fake_calib(
+        manual_corner_a_mm=MANUAL_CORNER_A, manual_corner_b_mm=MANUAL_CORNER_B))
+    _install_fake_hardware(monkeypatch, [_card_detection()])
+    cfg = cc.CardScanConfig(rows=2, cols=2, dwell_s=0.0)
+    monkeypatch.setattr(cc, "load_card_scan_config", lambda path=None: cfg)
+
+    manual_rect = cc.sub_rect_from_corners(DEFAULT_SCAN_AREA, MANUAL_CORNER_A, MANUAL_CORNER_B)
+    expected_nodes = cc.generate_node_path(cfg, manual_rect)
+    auto_rect = (CARD_CENTER_WORLD[0], CARD_CENTER_WORLD[1], CARD_WIDTH_MM, CARD_HEIGHT_MM, 0.0)
+    auto_nodes = cc.generate_node_path(cfg, auto_rect)
+    assert expected_nodes != auto_nodes, "the two sources must be distinguishable for this test to mean anything"
+
+    arrivals = []
+    monkeypatch.setattr(cc, "default_on_arrive",
+                         lambda i, x, y, label: arrivals.append((i, x, y, label)))
+
+    script = {
+        5: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_m, mod=0)],  # force manual
+        6: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_g, mod=0)],  # run
+        3000: [pygame.event.Event(pygame.QUIT)],
+    }
+    monkeypatch.setattr(pygame.event, "get", _scripted_event_get(script))
+
+    _load_gui_module().main()
+
+    assert len(arrivals) == len(expected_nodes) == 4
+    for (idx, x, y, label), (ex, ey, elabel) in zip(arrivals, expected_nodes):
+        assert x == pytest.approx(ex)
+        assert y == pytest.approx(ey)
+
+
+def test_card_gui_m_toggles_back_to_auto(monkeypatch):
+    # 'm' pressed twice with both sources available should land back on
+    # the auto (tag-detected) rect, not get stuck on manual.
+    monkeypatch.setattr(ac, "load_calib", _fake_calib(
+        manual_corner_a_mm=MANUAL_CORNER_A, manual_corner_b_mm=MANUAL_CORNER_B))
+    _install_fake_hardware(monkeypatch, [_card_detection()])
+    cfg = cc.CardScanConfig(rows=2, cols=2, dwell_s=0.0)
+    monkeypatch.setattr(cc, "load_card_scan_config", lambda path=None: cfg)
+
+    auto_rect = (CARD_CENTER_WORLD[0], CARD_CENTER_WORLD[1], CARD_WIDTH_MM, CARD_HEIGHT_MM, 0.0)
+    expected_nodes = cc.generate_node_path(cfg, auto_rect)
+
+    arrivals = []
+    monkeypatch.setattr(cc, "default_on_arrive",
+                         lambda i, x, y, label: arrivals.append((i, x, y, label)))
+
+    script = {
+        5: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_m, mod=0)],  # -> manual
+        6: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_m, mod=0)],  # -> back to auto
+        7: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_g, mod=0)],  # run
+        3000: [pygame.event.Event(pygame.QUIT)],
+    }
+    monkeypatch.setattr(pygame.event, "get", _scripted_event_get(script))
+
+    _load_gui_module().main()
+
+    assert len(arrivals) == len(expected_nodes) == 4
+    for (idx, x, y, label), (ex, ey, elabel) in zip(arrivals, expected_nodes):
+        assert x == pytest.approx(ex)
+        assert y == pytest.approx(ey)
+
+
+def test_card_gui_m_key_noop_when_no_manual_rect_configured(monkeypatch):
+    # No manual corners taught -- 'm' has nothing to switch to, must not
+    # crash and must leave the auto-detected rect driving the run.
+    monkeypatch.setattr(ac, "load_calib", _fake_calib())
+    _install_fake_hardware(monkeypatch, [_card_detection()])
+    cfg = cc.CardScanConfig(rows=2, cols=2, dwell_s=0.0)
+    monkeypatch.setattr(cc, "load_card_scan_config", lambda path=None: cfg)
+
+    auto_rect = (CARD_CENTER_WORLD[0], CARD_CENTER_WORLD[1], CARD_WIDTH_MM, CARD_HEIGHT_MM, 0.0)
+    expected_nodes = cc.generate_node_path(cfg, auto_rect)
+
+    arrivals = []
+    monkeypatch.setattr(cc, "default_on_arrive",
+                         lambda i, x, y, label: arrivals.append((i, x, y, label)))
+
+    script = {
+        5: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_m, mod=0)],  # nothing to switch to
+        6: [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_g, mod=0)],  # run
+        3000: [pygame.event.Event(pygame.QUIT)],
+    }
+    monkeypatch.setattr(pygame.event, "get", _scripted_event_get(script))
+
+    _load_gui_module().main()
+
+    assert len(arrivals) == len(expected_nodes) == 4
+    for (idx, x, y, label), (ex, ey, elabel) in zip(arrivals, expected_nodes):
+        assert x == pytest.approx(ex)
+        assert y == pytest.approx(ey)

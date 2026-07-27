@@ -662,6 +662,15 @@ def servo2_offset_from_known_elbow_angle(servo2_deg: float, servo2_dir: int,
 class HardwareConfig:
     servo_port: str = "/dev/cu.usbserial-0001"
     joint_ids: dict = field(default_factory=lambda: {"joint1": 1, "joint2": 2})
+    # Which Camera backend to use (see arm_hardware.Camera) -- "picamera2"
+    # for the eventual Raspberry Pi deployment, "usb" for a plain UVC
+    # webcam (e.g. a desk Arducam) while bench-debugging on a dev machine
+    # that can't run picamera2 at all. usb_camera_index selects which
+    # cv2.VideoCapture device to open when backend="usb" (try 0, 1, 2...
+    # until the right one shows up). Switching hosts later is just editing
+    # these two values, not the code.
+    camera_backend: str = "picamera2"
+    usb_camera_index: int = 0
 
 
 @dataclass
@@ -670,10 +679,19 @@ class CardConfig:
     stuck to it (tracked the same way ee_tag_id tracks the end effector --
     see detect_card_rect), and the card's own physical size, hand-measured
     since it's much bigger than the tag glued to it and can't be derived
-    from the tag detection alone."""
+    from the tag detection alone.
+
+    manual_corner_a_mm/manual_corner_b_mm are an optional fallback for when
+    the camera can't reliably auto-detect the card's tag (e.g. focus
+    issues): two corners jogged-to-and-recorded by hand (see
+    camera_view_gui.py's 'j'/'1'/'2' keys), turned into a rectangle by
+    card_core.sub_rect_from_corners. None until taught; either both are
+    set or neither is (see _validate_calib)."""
     tag_id: int = 20
     width_mm: float = 85.6
     height_mm: float = 54.0
+    manual_corner_a_mm: Optional[tuple] = None
+    manual_corner_b_mm: Optional[tuple] = None
 
 
 @dataclass
@@ -821,6 +839,34 @@ def _validate_calib(calib: dict) -> None:
             if val is None or not math.isfinite(val) or val <= 0:
                 raise ValueError(f"calib.json card.{key}={val} must be a positive finite number")
 
+        manual_corners = {k: card.get(k) for k in ("manual_corner_a_mm", "manual_corner_b_mm")}
+        if any(v is not None for v in manual_corners.values()):
+            # Either both taught or neither -- same "all or nothing" rule
+            # motion.scan_* uses, for the same reason (a partial pair is
+            # almost certainly an incomplete edit, not a valid rectangle).
+            if any(v is None for v in manual_corners.values()):
+                raise ValueError(
+                    f"calib.json card.manual_corner_a_mm/manual_corner_b_mm must be "
+                    f"either both set or both omitted, got {manual_corners}")
+            for key, val in manual_corners.items():
+                if not val or len(val) != 2 or not all(math.isfinite(v) for v in val):
+                    raise ValueError(f"calib.json card.{key}={val} must be a finite [x, y] pair")
+
+    hardware = calib.get("hardware")
+    if hardware is not None:
+        # Optional, like card/motion -- calib_hardware_config() fills in
+        # defaults for a fresh install / a calib.json that predates these
+        # two fields, so neither is required here.
+        backend = hardware.get("camera_backend")
+        if backend is not None and backend not in ("picamera2", "usb"):
+            raise ValueError(f"calib.json hardware.camera_backend={backend!r} "
+                              f"must be 'picamera2' or 'usb'")
+        usb_index = hardware.get("usb_camera_index")
+        if usb_index is not None and (not isinstance(usb_index, int) or isinstance(usb_index, bool)
+                                       or usb_index < 0):
+            raise ValueError(f"calib.json hardware.usb_camera_index={usb_index} "
+                              f"must be a non-negative integer")
+
     joint_limits = calib.get("joint_limits_deg")
     if joint_limits is not None:
         def _check_range(label, pair):
@@ -914,15 +960,21 @@ def calib_hardware_config(calib: dict) -> HardwareConfig:
     h = calib.get("hardware", {})
     defaults = HardwareConfig()
     return HardwareConfig(servo_port=h.get("servo_port", defaults.servo_port),
-                           joint_ids=h.get("joint_ids", defaults.joint_ids))
+                           joint_ids=h.get("joint_ids", defaults.joint_ids),
+                           camera_backend=h.get("camera_backend", defaults.camera_backend),
+                           usb_camera_index=h.get("usb_camera_index", defaults.usb_camera_index))
 
 
 def calib_card_config(calib: dict) -> CardConfig:
     c = calib.get("card", {})
     defaults = CardConfig()
+    corner_a = c.get("manual_corner_a_mm", defaults.manual_corner_a_mm)
+    corner_b = c.get("manual_corner_b_mm", defaults.manual_corner_b_mm)
     return CardConfig(tag_id=c.get("tag_id", defaults.tag_id),
                        width_mm=c.get("width_mm", defaults.width_mm),
-                       height_mm=c.get("height_mm", defaults.height_mm))
+                       height_mm=c.get("height_mm", defaults.height_mm),
+                       manual_corner_a_mm=tuple(corner_a) if corner_a is not None else None,
+                       manual_corner_b_mm=tuple(corner_b) if corner_b is not None else None)
 
 
 def calib_motion_config(calib: dict) -> MotionConfig:
