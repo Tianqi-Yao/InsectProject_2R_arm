@@ -261,13 +261,20 @@ class ArmController:
 
     def start_joint_scan(self, joint_waypoints: list) -> None:
         """Like start_scan(), but for waypoints that are ALREADY joint-
-        degree pairs (servo1_deg, servo2_deg) -- e.g. a hand-recorded path
-        (see v4/record_replay.py), where every point was physically
-        visited already (torque was off, a human dragged the arm there),
-        so there's no IK reachability question to ask and no
-        self.joint_limits check to apply. Same wrap_angle_near chaining +
-        corner-blending-with-a-full-stop-at-the-last-waypoint behaviour as
-        start_scan(), just skipping the ik_solve step entirely."""
+        degree pairs (servo1_deg, servo2_deg) -- e.g. a hand-recorded path,
+        where every point was physically visited already (torque was off,
+        a human dragged the arm there), so there's no IK reachability
+        question to ask and no self.joint_limits check to apply. Same
+        wrap_angle_near chaining + corner-blending-with-a-full-stop-at-
+        the-last-waypoint behaviour as start_scan(), just skipping the
+        ik_solve step entirely.
+
+        v4/record_replay.py's replay() doesn't currently call this -- it
+        wants a full stop + dwell at EVERY point (not just the last one),
+        so it drives set_joint_goal() one point at a time instead. This
+        method is here for a future "smooth continuous replay, no
+        per-point pause" mode, which would want exactly this corner-
+        blending behaviour."""
         prev = self._commanded
         joint_targets = []
         for j1, j2 in joint_waypoints:

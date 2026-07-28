@@ -1,7 +1,8 @@
-"""CLI entry point for v4: record a hand-driven path, then replay it.
+"""CLI entry point for v4: hand-mark a sequence of points, then replay
+through them with a pause at each one.
 
     python3 main.py record [--out PATH.json] [--port PORT]
-    python3 main.py replay [--in PATH.json] [--port PORT]
+    python3 main.py replay [--in PATH.json] [--port PORT] [--dwell SECONDS]
 """
 
 from __future__ import annotations
@@ -24,12 +25,14 @@ def main():
     p_replay = sub.add_parser("replay", help="replay a previously recorded path")
     p_replay.add_argument("--in", dest="in_path", type=Path, default=rr.DEFAULT_PATH)
     p_replay.add_argument("--port", default=rr.DEFAULT_SERVO_PORT)
+    p_replay.add_argument("--dwell", type=float, default=rr.DEFAULT_DWELL_S,
+                           help=f"seconds to pause at each point (default: {rr.DEFAULT_DWELL_S})")
 
     args = parser.parse_args()
     if args.command == "record":
         rr.record(args.out, servo_port=args.port)
     else:
-        rr.replay(args.in_path, servo_port=args.port)
+        rr.replay(args.in_path, servo_port=args.port, dwell_s=args.dwell)
 
 
 if __name__ == "__main__":
