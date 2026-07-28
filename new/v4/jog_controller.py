@@ -259,6 +259,24 @@ class ArmController:
         self._queue = []
         self._advance_scan()
 
+    def start_joint_scan(self, joint_waypoints: list) -> None:
+        """Like start_scan(), but for waypoints that are ALREADY joint-
+        degree pairs (servo1_deg, servo2_deg) -- e.g. a hand-recorded path
+        (see v4/record_replay.py), where every point was physically
+        visited already (torque was off, a human dragged the arm there),
+        so there's no IK reachability question to ask and no
+        self.joint_limits check to apply. Same wrap_angle_near chaining +
+        corner-blending-with-a-full-stop-at-the-last-waypoint behaviour as
+        start_scan(), just skipping the ik_solve step entirely."""
+        prev = self._commanded
+        joint_targets = []
+        for j1, j2 in joint_waypoints:
+            prev = (wrap_angle_near(j1, prev[0]), wrap_angle_near(j2, prev[1]))
+            joint_targets.append(prev)
+        self._scan = _ScanState(joint_targets=joint_targets, index=0)
+        self._queue = []
+        self._advance_scan()
+
     def stop_scan(self) -> None:
         """Abort the active scan immediately. Does NOT clear the current
         in-flight segment -- whatever's already queued keeps playing out

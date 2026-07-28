@@ -1,0 +1,19 @@
+# Dependencies for v3 (arm_core.py / path_core.py / jog_controller.py /
+# arm_hardware.py / control_gui.py / main.py). Slimmer than ../requirements.txt:
+# v3 dropped the AprilTag/homography vision-calibration stack entirely, so
+# numpy/scipy/pupil-apriltags/matplotlib aren't needed here.
+
+pygame>=2.1                    # control_gui.py's control panel
+opencv-python-headless>=4.8    # arm_hardware.Camera.capture_and_save() / thumbnail decode path
+
+# Feetech STS3215 bus servo SDK -- only needed to run `main.py control`
+# against real hardware (main.py preview needs neither this nor pygame).
+# See ../requirements.txt's comment for why this low-level API, not a
+# higher-level sms_sts-style class, is what arm_hardware.py talks to.
+feetech-servo-sdk
+pyserial>=3.5
+
+# picamera2 is Raspberry Pi OS-specific -- install via apt, not pip:
+#   sudo apt install -y python3-picamera2
+# If using a venv, create it with --system-site-packages so the
+# apt-installed picamera2 is visible inside it.

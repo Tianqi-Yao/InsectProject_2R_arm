@@ -1,0 +1,73 @@
+{
+  "kinematics": {
+    "L1": 125.0,
+    "L2": 95.0,
+    "base_x": 100.0,
+    "base_y": -45.0,
+    "servo1_offset_deg": 23.08,
+    "servo2_offset_deg": 0.0,
+    "servo1_dir": 1,
+    "servo2_dir": 1,
+    "elbow_offset_mm": 0.0
+  },
+  "hardware": {
+    "servo_port": "/dev/cu.usbserial-0001",
+    "joint_ids": {
+      "joint1": 1,
+      "joint2": 2
+    }
+  },
+  "motion": {
+    "planner_name": "trapezoidal",
+    "jog_vmax_deg_s": 60.0,
+    "jog_amax_deg_s2": 120.0,
+    "scan_vmax_deg_s": 90.0,
+    "scan_amax_deg_s2": 180.0,
+    "blend_threshold": 0.7,
+    "control_hz": 50.0
+  },
+  "photo": {
+    "spacing_x_mm": 20.0,
+    "spacing_y_mm": 20.0,
+    "margin_mm": 0.0,
+    "dwell_s": 1.0,
+    "max_step_mm": 5.0,
+    "photo_dir": "photos"
+  },
+  "rectangle": {
+    "corners_mm": [
+      [
+        40.0,
+        -20.0
+      ],
+      [
+        140.0,
+        -25.0
+      ],
+      [
+        145.0,
+        55.0
+      ],
+      [
+        45.0,
+        60.0
+      ]
+    ],
+    "center_x_mm": 92.5,
+    "center_y_mm": 17.5,
+    "width_mm": 100.0,
+    "height_mm": 80.0,
+    "rotation_deg": -5.7
+  },
+  "joint_limits_deg": {
+    "joint1": [
+      0.0,
+      180.0
+    ],
+    "joint2": [
+      0.0,
+      220.0
+    ],
+    "coupled_boundary": []
+  }
+}
