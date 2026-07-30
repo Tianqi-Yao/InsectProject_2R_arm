@@ -1,0 +1,21 @@
+# Dependencies for v4 (record_replay.py / arm_core.py / arm_hardware.py /
+# jog_controller.py / main.py). v4 has no vision-based calibration and no
+# IK -- it's pure joint-space teach-and-replay -- so unlike ../requirements.txt
+# it does NOT need numpy/scipy/pupil-apriltags/pygame/matplotlib.
+
+# Feetech STS3215 bus servo SDK (import name `scservo_sdk`). See
+# arm_hardware.py's Servos class for the register-level protocol details;
+# if your install exposes a different API, that's the one file to adjust.
+feetech-servo-sdk
+pyserial>=3.5
+
+# Only needed if you pass --photos to `main.py replay` (imx477 photo
+# capture via arm_hardware.py's Camera class).
+opencv-python-headless>=4.8   # headless: no GUI deps needed on the Pi
+
+# picamera2 is Raspberry Pi OS-specific and ships as a system package with
+# libcamera bindings pip usually can't build correctly on its own. Install
+# it via apt instead:
+#   sudo apt install -y python3-picamera2
+# If you use a venv, create it with --system-site-packages so the
+# apt-installed picamera2 is visible inside it.

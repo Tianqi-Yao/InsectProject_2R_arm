@@ -3,6 +3,7 @@ through them with a pause at each one.
 
     python3 main.py record [--out PATH.json] [--port PORT]
     python3 main.py replay [--in PATH.json] [--port PORT] [--dwell SECONDS]
+    python3 main.py replay --photos photos/ [--photo-delay SECONDS]
 """
 
 from __future__ import annotations
@@ -27,12 +28,21 @@ def main():
     p_replay.add_argument("--port", default=rr.DEFAULT_SERVO_PORT)
     p_replay.add_argument("--dwell", type=float, default=rr.DEFAULT_DWELL_S,
                            help=f"seconds to pause at each point (default: {rr.DEFAULT_DWELL_S})")
+    p_replay.add_argument("--photos", type=Path, default=None,
+                           help="directory to save one imx477 photo per point (default: "
+                                "no camera, pure teach-and-replay); each run gets its own "
+                                "timestamped subfolder")
+    p_replay.add_argument("--photo-delay", type=float, dest="photo_delay",
+                           default=rr.DEFAULT_PHOTO_DELAY_S,
+                           help=f"seconds into the dwell before the shutter fires, only used "
+                                f"with --photos (default: {rr.DEFAULT_PHOTO_DELAY_S})")
 
     args = parser.parse_args()
     if args.command == "record":
         rr.record(args.out, servo_port=args.port)
     else:
-        rr.replay(args.in_path, servo_port=args.port, dwell_s=args.dwell)
+        rr.replay(args.in_path, servo_port=args.port, dwell_s=args.dwell,
+                  photo_dir=args.photos, photo_delay_s=args.photo_delay)
 
 
 if __name__ == "__main__":

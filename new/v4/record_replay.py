@@ -5,12 +5,18 @@ re-engage torque and replay through those points in order, pausing
 no joint_limits check -- every recorded point was physically visited by
 hand already (torque was off when it was marked), so it's inherently
 reachable and safe to replay as-is.
+
+Optionally, replay() can snap a photo partway through each dwell (see
+`photo_dir`/`photo_delay_s`) using the Camera class already living in
+arm_hardware.py (Picamera2 + cv2, imx477-compatible, Pi-only -- deferred
+imports, so this module still runs camera-less on a dev machine).
 """
 
 from __future__ import annotations
 
 import json
 import time
+from datetime import datetime
 from pathlib import Path
 
 import arm_core as core
@@ -19,7 +25,15 @@ import jog_controller as jc
 import motion_planning as mp
 
 DEFAULT_PATH = Path(__file__).parent / "recorded_path.json"
-DEFAULT_DWELL_S = 2.0
+DEFAULT_DWELL_S = 4.0
+# Seconds into the dwell before the shutter fires -- gives the arm's own
+# vibration time to settle after motion_planning's controller reports
+# is_moving == False (that flag means "trajectory finished", not "perfectly
+# still"). The remaining dwell_s - photo_delay_s is idle time after the shot.
+DEFAULT_PHOTO_DELAY_S = 2.0
+# imx477 (Pi HQ Camera) full-sensor still resolution -- these photos are for
+# visual inspection, not a live feed, so prefer detail over framerate.
+DEFAULT_PHOTO_RESOLUTION = (4056, 3040)
 
 # No calib.json for v4 -- edit these two if your rig differs (or pass
 # --port on the CLI). Everything else (link lengths, offsets, ...) is
@@ -77,14 +91,30 @@ def record(out_path: Path = DEFAULT_PATH, servo_port: str = DEFAULT_SERVO_PORT,
 
 
 def replay(in_path: Path = DEFAULT_PATH, servo_port: str = DEFAULT_SERVO_PORT,
-           joint_ids: dict = None, dwell_s: float = DEFAULT_DWELL_S) -> None:
+           joint_ids: dict = None, dwell_s: float = DEFAULT_DWELL_S,
+           photo_dir: Path = None, photo_delay_s: float = DEFAULT_PHOTO_DELAY_S) -> None:
     """Visit each recorded point in order: move there, wait for a full
-    stop, pause dwell_s, then move on to the next one."""
+    stop, pause dwell_s, then move on to the next one. If photo_dir is
+    given, a photo is taken photo_delay_s seconds into each dwell (the
+    remaining dwell_s - photo_delay_s is idle time after the shot); each
+    replay run gets its own timestamped subfolder under photo_dir so
+    repeated runs don't overwrite each other's photos."""
     joint_ids = joint_ids or DEFAULT_JOINT_IDS
     points = json.loads(in_path.read_text())
     if not points:
         print(f"{in_path} has no recorded points")
         return
+
+    camera = None
+    run_dir = None
+    if photo_dir is not None:
+        if not (0 < photo_delay_s < dwell_s):
+            raise ValueError(f"photo_delay_s ({photo_delay_s}) must be between 0 and "
+                              f"dwell_s ({dwell_s}) for a photo to fit inside the dwell")
+        run_dir = Path(photo_dir) / datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        camera = hw.Camera(DEFAULT_PHOTO_RESOLUTION)
+        camera.connect()
 
     servos = _connect(servo_port, joint_ids)
     _resync_and_relock(servos)
@@ -103,7 +133,16 @@ def replay(in_path: Path = DEFAULT_PATH, servo_port: str = DEFAULT_SERVO_PORT,
                 controller.tick()
                 time.sleep(controller.dt)
             print(f"  point {i + 1}/{len(points)} reached -- dwelling {dwell_s:.1f}s")
-            time.sleep(dwell_s)
+            if camera is not None:
+                time.sleep(photo_delay_s)
+                photo_path = run_dir / f"point_{i + 1:03d}.jpg"
+                camera.capture_and_save(photo_path)
+                print(f"    photo saved -> {photo_path}")
+                time.sleep(dwell_s - photo_delay_s)
+            else:
+                time.sleep(dwell_s)
     finally:
         servos.close()
+        if camera is not None:
+            camera.close()
     print("replay done.")
