@@ -203,15 +203,17 @@ class Camera:
 
     def capture_and_save(self, path: Path) -> None:
         """Grab one still frame and write it to `path` (any extension
-        cv2.imwrite supports, e.g. .jpg/.png). RGB888 (picamera2's own
-        convention) needs a channel swap for cv2.imwrite, which expects
-        BGR."""
+        cv2.imwrite supports, e.g. .jpg/.png). Despite its name, picamera2's
+        "RGB888" format delivers pixels in BGR channel order (a documented
+        upstream quirk -- "RGB888"/"BGR888" are swapped from what the names
+        suggest), which is exactly the order cv2.imwrite expects, so no
+        channel-swap conversion is needed (doing one, as this used to,
+        double-flips R and B -- e.g. yellow subjects come out looking blue)."""
         import cv2
 
         frame = self._picam.capture_array()
-        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         path.parent.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(path), bgr):
+        if not cv2.imwrite(str(path), frame):
             raise IOError(f"cv2.imwrite failed to write {path}")
 
 

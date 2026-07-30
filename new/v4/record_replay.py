@@ -25,12 +25,12 @@ import jog_controller as jc
 import motion_planning as mp
 
 DEFAULT_PATH = Path(__file__).parent / "recorded_path.json"
-DEFAULT_DWELL_S = 4.0
+DEFAULT_DWELL_S = 5.0
 # Seconds into the dwell before the shutter fires -- gives the arm's own
 # vibration time to settle after motion_planning's controller reports
 # is_moving == False (that flag means "trajectory finished", not "perfectly
 # still"). The remaining dwell_s - photo_delay_s is idle time after the shot.
-DEFAULT_PHOTO_DELAY_S = 2.0
+DEFAULT_PHOTO_DELAY_S = 3.0
 # imx477 (Pi HQ Camera) full-sensor still resolution -- these photos are for
 # visual inspection, not a live feed, so prefer detail over framerate.
 DEFAULT_PHOTO_RESOLUTION = (4056, 3040)

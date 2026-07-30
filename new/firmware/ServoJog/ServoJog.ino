@@ -86,6 +86,20 @@ void updateScreen() {
   display.display();
 }
 
+// Discover the real ID of whatever single servo is currently on the bus, via
+// a broadcast ping (ID 0xFE). The servo answers with its own ID instead of
+// the broadcast address, which is the only way to find an ID you don't
+// already know. Only reliable with exactly one servo connected -- with more
+// than one on the bus, replies collide and this will fail or return garbage.
+void scanServoId(String &resultOut) {
+  int id = st.Ping(0xFE);
+  if (id < 0) {
+    resultOut = "error: no servo responded (only connect ONE servo to scan)";
+    return;
+  }
+  resultOut = "found: id " + String(id);
+}
+
 // Reassign a servo's own persistent bus ID (written to its EEPROM). If the
 // servo being renamed is whichever one is currently mapped to joint1/joint2,
 // that mapping follows it automatically -- no re-flash needed afterwards.
@@ -129,6 +143,8 @@ input{width:3em;font-size:1.1em}
 <button oncontextmenu="return false" onpointerdown="startJog(event,2,1)" onpointerup="stopJog()" onpointerleave="stopJog()" onpointercancel="stopJog()">&#9654;</button>
 <div class="pos" id="p2">-</div>
 <h2>Servo ID</h2>
+<button style="font-size:1em;width:auto;padding:0 0.6em" onclick="scanId()">Scan ID (only 1 servo connected!)</button>
+<div class="pos" id="scanmsg">-</div>
 from <input type="number" id="fromId" value="1">
 to <input type="number" id="toId" value="1">
 <button style="font-size:1em;width:auto;padding:0 0.6em" onclick="setId()">Set ID</button>
@@ -160,6 +176,14 @@ function setId(){
   });
 }
 
+function scanId(){
+  fetch('/scanid').then(r=>r.text()).then(m=>{
+    document.getElementById('scanmsg').innerText = m;
+    const match = m.match(/id (\d+)/);
+    if (match) document.getElementById('fromId').value = match[1];
+  });
+}
+
 setInterval(()=>{ fetch('/pos').then(r=>r.text()).then(show); }, 1000);
 </script>
 </body></html>
@@ -180,6 +204,12 @@ void handleJog() {
 
 void handlePos() {
   server.send(200, "text/plain", posReply());
+}
+
+void handleScanId() {
+  String result;
+  scanServoId(result);
+  server.send(200, "text/plain", result);
 }
 
 void handleSetId() {
@@ -228,6 +258,7 @@ void setup() {
   server.on("/jog", handleJog);
   server.on("/pos", handlePos);
   server.on("/setid", handleSetId);
+  server.on("/scanid", handleScanId);
   server.begin();
 
   updateScreen();

@@ -100,7 +100,29 @@ python3 main.py replay --photos photos/ [--photo-delay SECONDS]
 
 `--dwell`和`--photo-delay`都可以调，但要满足`0 < photo-delay < dwell`（拍照必须发生在暂停时间内部），否则会直接报错、不会跑到一半才发现设置有问题。
 
-## 5. 不需要硬件的纯逻辑测试
+## 5. 定时巡检（cron）
+
+想让机械臂每隔固定时间自动跑一次`replay --photos`，用配套的三个脚本，基于crontab（比systemd service/timer简单，不需要理解unit文件、不需要sudo）：
+
+```bash
+./install_replay_cron.sh [--port /dev/ttyUSB0] [--photos DIR] [--interval-min 30] [--python PATH]
+./stop_replay_cron.sh
+./uninstall_replay_cron.sh
+```
+
+- **`install_replay_cron.sh`**：往你当前用户的crontab里写一行（不需要sudo，也不用手动`crontab -e`），默认每30分钟跑一次`main.py replay --photos <项目目录>/photos --port /dev/ttyUSB0`，输出追加到同目录下的`replay.log`。**多跑几次这个脚本没关系**——脚本靠一个固定的标记注释（`# v4-replay-timer`）认出自己这一行，每次都是先删掉旧的再插入新的，不会越点越多个定时任务；改完参数（比如`--interval-min 15`）重新跑一次就是更新配置。如果依赖装在venv里，记得用`--python`指向venv里的`python3`（比如`--python .venv/bin/python3`），cron不会帮你自动激活venv。
+- **`stop_replay_cron.sh`**：把crontab里那一行注释掉（配置还在，不会删），暂停触发。之后想恢复，重新跑一次`install_replay_cron.sh`就行（会自动把注释掉的那行换成新的启用状态）。
+- **`uninstall_replay_cron.sh`**：把那一行彻底从crontab里删掉。
+
+三个脚本都是幂等的：不管当前是什么状态（没装/已装/已停），重复运行都不会报错或者叠加出问题。
+
+查看当前配置和日志：
+```bash
+crontab -l
+tail -f replay.log
+```
+
+## 6. 不需要硬件的纯逻辑测试
 
 ```bash
 cd new/v4 && python3 -m pytest tests/
