@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "record-replay"
+version = "0.1.0"
+description = "Joint-space record/replay for the 2R arm, plus cron-scheduled unattended replay. No FK/IK, no calibration -- points are hand-visited with torque off, so they're inherently reachable and safe to replay as-is."
+requires-python = ">=3.10"
+dependencies = [
+    "arm-hw-core",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+arm-replay = "record_replay.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "homography-calib"
+version = "0.1.0"
+description = "AprilTag corner-sheet homography calibration (pixel<->mm mapping) for the 2R arm. Depends only on arm-hw-core; does not move the arm."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python-headless>=4.8",
+    "arm-hw-core",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+arm-homography = "homography_calib.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arm-hw-core"
+version = "0.1.0"
+description = "Shared low-level hardware layer for the 2R arm: STS3215 servo register I/O, software+hardware joint-limit safety, camera, AprilTag detection. The ONLY package the five v2 feature packages are allowed to depend on."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python-headless>=4.8",
+    "pupil-apriltags>=1.0",
+    "feetech-servo-sdk",
+    "pyserial>=3.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+arm-hw = "arm_hw_core.bringup_cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

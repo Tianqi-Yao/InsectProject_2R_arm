@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "card-scan"
+version = "0.1.0"
+description = "AprilTag-on-card auto-detected grid scan for the 2R arm. Reads homography_calib and kinematics_fit's output files (read-only); owns its own copy of kinematics/motion (with corner-blended multi-waypoint scanning), depends only on arm-hw-core."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python-headless>=4.8",
+    "arm-hw-core",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+arm-cardscan = "card_scan.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
